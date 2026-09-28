@@ -12,6 +12,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        let env = ProcessInfo.processInfo.environment
+        if let cmds = env["RETICLE_REMOTE_CMDS"], let out = env["RETICLE_REMOTE_OUT"] {
+            RemoteControl.run(commands: URL(fileURLWithPath: cmds), out: URL(fileURLWithPath: out))
+            return
+        }
+        #endif
         statusBar = StatusBarController(
             onCapture: { [weak self] in self?.startCapture() },
             onRecognizeText: { [weak self] in self?.startCapture(mode: .recognizeText) },

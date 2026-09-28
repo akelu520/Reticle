@@ -2,14 +2,14 @@ import CoreGraphics
 import Foundation
 
 public enum AnnotationKind: String, Codable, CaseIterable, Sendable {
-    case rect, ellipse, arrow, pen, highlight, mosaicBrush, mosaicBox, text, label
+    case rect, ellipse, line, arrow, pen, highlight, mosaicBrush, mosaicBox, text, label
 
     /// Paint order: mosaic → highlight → shapes → text. Lower draws first.
     var layer: Int {
         switch self {
         case .mosaicBrush, .mosaicBox: return 0
         case .highlight: return 1
-        case .rect, .ellipse, .arrow, .pen: return 2
+        case .rect, .ellipse, .line, .arrow, .pen: return 2
         case .text, .label: return 3
         }
     }
@@ -95,9 +95,10 @@ public struct Annotation: Identifiable, Codable, Equatable, Sendable {
         case .arrow:
             let path = ShapePaths.arrow(from: points.first ?? .zero, to: points.last ?? .zero, width: style.lineWidth)
             return path.contains(p) || path.copy(strokingWithWidth: tolerance * 2, lineCap: .round, lineJoin: .round, miterLimit: 1).contains(p)
-        case .rect, .ellipse, .pen, .highlight, .mosaicBrush:
-            let path = kind == .rect ? CGPath(rect: spanRect, transform: nil)
+        case .rect, .ellipse, .line, .pen, .highlight, .mosaicBrush:
+            let path = kind == .rect ? ShapePaths.roundedRect(spanRect, lineWidth: style.lineWidth)
                 : kind == .ellipse ? CGPath(ellipseIn: spanRect, transform: nil)
+                : kind == .line ? ShapePaths.stroke([points.first ?? .zero, points.last ?? .zero])
                 : ShapePaths.stroke(points)
             let width = max(style.lineWidth, 1) + tolerance * 2
             return path.copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 1).contains(p)

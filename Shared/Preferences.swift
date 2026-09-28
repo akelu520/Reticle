@@ -15,6 +15,12 @@ enum Preferences {
         set { encode(newValue, "recordHotkey") }
     }
 
+    /// Target language picked from 翻译 ▾ (BCP-47), or nil to choose from the text.
+    static var translationTarget: String? {
+        get { defaults.string(forKey: "translationTarget") }
+        set { defaults.set(newValue, forKey: "translationTarget") }
+    }
+
     /// 保存截图历史 (最近截图), on by default.
     static var historyEnabled: Bool {
         get { defaults.object(forKey: "historyEnabled") as? Bool ?? true }

@@ -61,14 +61,15 @@ enum ScreenGrabber {
         }
     }
 
-    /// On-screen windows of other apps below the Dock level (normal, floating and
-    /// always-on-top windows such as picture-in-picture), in CG global coordinates, front to back.
+    /// On-screen windows of other apps below the Dock level, in CG global coordinates, front to back:
+    /// normal and always-on-top windows (e.g. picture-in-picture) and desktop widgets. The
+    /// wallpaper covers the whole screen and comes last, so it only matches where nothing else does.
     private static func cgWindowFrames() -> [CGRect] {
-        let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
         let pid = getpid()
         return info.compactMap { w in
             guard (w[kCGWindowOwnerPID as String] as? pid_t) != pid,
-                  let layer = w[kCGWindowLayer as String] as? Int, layer >= 0, layer < Int(CGWindowLevelForKey(.dockWindow)),
+                  let layer = w[kCGWindowLayer as String] as? Int, layer < Int(CGWindowLevelForKey(.dockWindow)),
                   ((w[kCGWindowAlpha as String] as? Double) ?? 1) > 0,
                   let dict = w[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: dict),

@@ -137,7 +137,7 @@ final class AnnotationEditor {
     func cursor(at p: CGPoint) -> NSCursor {
         switch model.tool {
         case .text?: return .iBeam
-        case .some: return .crosshair
+        case .some: return CaptureCursor.reticle
         case nil: return model.document.hit(pixel(p), tolerance: 4 * scale) != nil ? .pointingHand : .openHand
         }
     }
@@ -148,20 +148,31 @@ final class AnnotationEditor {
 
     // MARK: - Text input
 
+    /// Live preview of a label while its text is typed.
+    private var editingLabel: Annotation?
+
     private func beginTextInput(kind: AnnotationKind, origin: CGPoint, text: String, flipped: Bool = false) {
         guard let style = model.pendingTextStyle else { return }
         let isLabel = kind == .label
+        // Labels: white text over the slate bubble drawn by the canvas; text: the chosen color.
         let input = TextInputView(fontSize: style.fontSize / scale,
-                                  color: isLabel ? (style.color.isLight ? RGBA.black : RGBA.white).nsColor : style.color.nsColor,
-                                  bubble: isLabel ? style.color.nsColor : nil)
+                                  color: isLabel ? .white : style.color.nsColor,
+                                  bubble: nil)
+        if isLabel { input.layer?.borderWidth = 0 }
         input.string = text
         let scale = self.scale
-        let place: (String) -> Void = { [weak input] current in
+        let place: (String) -> Void = { [weak self, weak input] current in
             guard let input else { return }
             let size = TextMetrics.size(of: current, fontSize: style.fontSize)
-            let originPx = isLabel
-                ? LabelLayout(anchor: origin, text: current, fontSize: style.fontSize, flipped: flipped).textOrigin
-                : origin
+            let originPx: CGPoint
+            if isLabel {
+                let preview = Annotation(kind: .label, points: [origin], style: style, text: current, labelFlipped: flipped)
+                originPx = LabelLayout(annotation: preview).textOrigin
+                self?.editingLabel = preview
+                self?.refreshCanvas()
+            } else {
+                originPx = origin
+            }
             input.frame = CGRect(x: originPx.x / scale, y: originPx.y / scale,
                                  width: max(size.width / scale, 12), height: size.height / scale)
         }
@@ -177,6 +188,7 @@ final class AnnotationEditor {
     func commitTextInput() {
         guard let input = textInput else { return }
         textInput = nil
+        editingLabel = nil
         model.finishText(input.string)
         input.removeFromSuperview()
         host.window?.makeFirstResponder(host)
@@ -248,7 +260,8 @@ final class AnnotationEditor {
     private func refreshCanvas() {
         let selected = model.tool == nil ? model.selectedID.flatMap { model.document.annotation($0) } : nil
         let watermark = watermarkPanelOpen ? canvas.content.watermark : model.document.watermark
-        canvas.content = .init(annotations: model.visibleAnnotations, watermark: watermark, selectedBounds: selected?.bounds)
+        canvas.content = .init(annotations: model.visibleAnnotations, watermark: watermark, selectedBounds: selected?.bounds,
+                               editingLabel: editingLabel)
     }
 
     #if DEBUG

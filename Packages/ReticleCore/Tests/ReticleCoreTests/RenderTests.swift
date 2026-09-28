@@ -110,3 +110,59 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(Document.paintOrder([text, shape, mosaic]).map(\.kind), [.mosaicBox, .rect, .text])
     }
 }
+
+final class ReferenceStyleTests: XCTestCase {
+    let style = Style(color: .red, lineWidth: 6, fontSize: 20)
+
+    func render(_ annotations: [Annotation], width: Int = 200, height: Int = 120) -> CGImage {
+        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let base = ctx.makeImage()!
+        return Compositor.render(base: base, pixelated: nil, document: Document(annotations: annotations), crop: CGRect(x: 0, y: 0, width: width, height: height))!
+    }
+
+    func pixel(_ image: CGImage, _ x: Int, _ y: Int) -> [UInt8] {
+        RenderTests().pixel(image, x, y)
+    }
+
+    func testPaletteMatchesReference() {
+        XCTAssertEqual(RGBA.palette, [RGBA(hex: 0xF64A45), RGBA(hex: 0xFFC60C), RGBA(hex: 0x34BE4B), RGBA(hex: 0x336DF4),
+                                      RGBA(hex: 0x000000), RGBA(hex: 0x8F959E), RGBA(hex: 0xFFFFFF)])
+    }
+
+    func testRectangleHasRoundedCorners() {
+        let out = render([Annotation(kind: .rect, points: [CGPoint(x: 20, y: 20), CGPoint(x: 120, y: 90)], style: style)])
+        XCTAssertLessThan(pixel(out, 60, 20)[1], 140, "edge is stroked")
+        XCTAssertEqual(pixel(out, 20, 20), [255, 255, 255, 255], "the sharp corner point is outside the rounded outline")
+    }
+
+    func testLineIsAStraightStroke() throws {
+        let line = Annotation(kind: .line, points: [CGPoint(x: 20, y: 60), CGPoint(x: 180, y: 60)], style: style)
+        let out = render([line])
+        XCTAssertLessThan(pixel(out, 100, 60)[1], 140)
+        XCTAssertEqual(pixel(out, 100, 40), [255, 255, 255, 255])
+        XCTAssertTrue(line.hitTest(CGPoint(x: 100, y: 62), tolerance: 2))
+        XCTAssertFalse(line.hitTest(CGPoint(x: 100, y: 80), tolerance: 2))
+        XCTAssertEqual(EditorModel.constrained(from: .zero, to: CGPoint(x: 100, y: 8), kind: .line).y, 0, accuracy: 0.001)
+    }
+
+    func testLabelBubbleIsDarkWithColoredAnchor() {
+        let label = Annotation(kind: .label, points: [CGPoint(x: 30, y: 60)], style: style, text: "A")
+        let out = render([label])
+        let l = LabelLayout(annotation: label)
+        let bubble = pixel(out, Int(l.bubble.maxX) - 4, Int(l.bubble.midY))
+        XCTAssertEqual(Array(bubble.prefix(3)), [0x37, 0x42, 0x51], "bubble uses the reference slate color")
+        XCTAssertGreaterThan(pixel(out, 30, 60)[0], 200, "anchor dot uses the label color (red)")
+    }
+
+    func testLineTool() {
+        var m = EditorModel(scale: 1)
+        m.tool = .line
+        _ = m.pointerDown(at: CGPoint(x: 10, y: 10))
+        m.pointerDragged(to: CGPoint(x: 90, y: 40))
+        m.pointerUp()
+        XCTAssertEqual(m.document.annotations.first?.kind, .line)
+    }
+}

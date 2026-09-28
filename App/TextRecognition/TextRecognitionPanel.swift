@@ -181,6 +181,15 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.copyButton.title = "复制" }
     }
 
+    /// 翻译 on the main toolbar: translate as soon as the text is shown.
+    func translateNow(to target: String?) {
+        guard !original.isEmpty else { return }
+        if let target { selectTarget(target) }
+        translated = nil
+        showingTranslation = false
+        toggleTranslation()
+    }
+
     @objc private func targetChanged() {
         translated = nil
         if showingTranslation { runTranslation() }

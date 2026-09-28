@@ -41,12 +41,14 @@ public enum TextMetrics {
     }
 }
 
-/// Geometry of a label: a colored anchor dot, a short leader line and a bubble with text.
+/// Geometry of a label: a colored anchor dot and, a small gap away, a dark bubble
+/// whose notch points back at the dot.
 public struct LabelLayout: Equatable {
     public let dot: CGRect
-    public let lineStart: CGPoint
-    public let lineEnd: CGPoint
     public let bubble: CGRect
+    /// Tip of the notch, on the dot side.
+    public let notchTip: CGPoint
+    public let flipped: Bool
     /// Top-left of the text inside the bubble.
     public let textOrigin: CGPoint
 
@@ -55,19 +57,32 @@ public struct LabelLayout: Equatable {
     }
 
     public init(anchor: CGPoint, text: String, fontSize f: CGFloat, flipped: Bool) {
-        let r = max(f * 0.35, 4)
+        let r = max(f * 0.3, 3)
         dot = CGRect(x: anchor.x - r, y: anchor.y - r, width: r * 2, height: r * 2)
         let textSize = TextMetrics.size(of: text, fontSize: f)
-        let padX = f * 0.5, padY = f * 0.25
-        let bubbleSize = CGSize(width: max(textSize.width, f * 2) + padX * 2, height: textSize.height + padY * 2)
-        let leader = f * 1.2
+        let padX = f * 0.7, padY = f * 0.75
+        let bubbleSize = CGSize(width: max(textSize.width, f * 2.2) + padX * 2, height: textSize.height + padY * 2)
         let dir: CGFloat = flipped ? -1 : 1
-        lineStart = CGPoint(x: anchor.x + dir * r, y: anchor.y)
-        lineEnd = CGPoint(x: anchor.x + dir * (r + leader), y: anchor.y)
-        let bubbleX = flipped ? lineEnd.x - bubbleSize.width : lineEnd.x
+        let notch = f * 0.45
+        notchTip = CGPoint(x: anchor.x + dir * (r + f * 0.3), y: anchor.y)
+        let edge = notchTip.x + dir * notch
+        let bubbleX = flipped ? edge - bubbleSize.width : edge
         bubble = CGRect(x: bubbleX, y: anchor.y - bubbleSize.height / 2, width: bubbleSize.width, height: bubbleSize.height)
         textOrigin = CGPoint(x: bubble.minX + padX, y: bubble.minY + padY)
+        self.flipped = flipped
     }
 
-    public var bounds: CGRect { dot.union(bubble) }
+    public var bounds: CGRect { dot.union(bubble).union(CGRect(origin: notchTip, size: .zero)) }
+
+    /// Rounded bubble plus the triangular notch toward the dot.
+    public var bubblePath: CGPath {
+        let path = CGMutablePath()
+        let radius = min(bubble.height * 0.3, bubble.width / 2)
+        path.addRoundedRect(in: bubble, cornerWidth: radius, cornerHeight: radius)
+        let edgeX = flipped ? bubble.maxX : bubble.minX
+        let half = min(bubble.height * 0.22, bubble.height / 2 - radius)
+        path.addLines(between: [CGPoint(x: edgeX, y: notchTip.y - half), notchTip, CGPoint(x: edgeX, y: notchTip.y + half)])
+        path.closeSubpath()
+        return path
+    }
 }

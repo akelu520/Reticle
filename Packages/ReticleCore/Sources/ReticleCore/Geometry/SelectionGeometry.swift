@@ -10,7 +10,7 @@ public enum SelectionHandle: CaseIterable, Sendable {
 public enum SelectionGeometry {
     /// Distance in points within which a handle or edge is considered hit.
     public static let hitTolerance: CGFloat = 6
-    public static let toolbarGap: CGFloat = 8
+    public static let toolbarGap: CGFloat = 14
 
     /// Rectangle spanned by a drag, normalized and clamped to `bounds`.
     public static func rect(from start: CGPoint, to end: CGPoint, within bounds: CGRect) -> CGRect {

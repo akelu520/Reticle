@@ -17,7 +17,7 @@ final class EditorModelTests: XCTestCase {
         let a = m.document.annotations[0]
         XCTAssertEqual(a.kind, .rect)
         XCTAssertEqual(a.spanRect, CGRect(x: 10, y: 10, width: 100, height: 50))
-        XCTAssertEqual(a.style.lineWidth, 8) // medium 4pt × 2
+        XCTAssertEqual(a.style.lineWidth, 6) // default small 3pt × 2
         XCTAssertEqual(a.style.color, .red)
     }
 
@@ -101,7 +101,7 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(m.document.annotations[0].style.lineWidth, 8)
         XCTAssertEqual(m.currentPreset, ToolPreset(color: .blue, size: .large))
         m.undo()
-        XCTAssertEqual(m.document.annotations[0].style.lineWidth, 4)
+        XCTAssertEqual(m.document.annotations[0].style.lineWidth, 3)
         XCTAssertEqual(m.preset(for: .arrow).color, .blue, "the tool remembers the last color")
     }
 
@@ -109,7 +109,7 @@ final class EditorModelTests: XCTestCase {
         var m = EditorModel(scale: 2)
         m.tool = .text
         XCTAssertEqual(m.pointerDown(at: CGPoint(x: 5, y: 5)), .beginText(origin: CGPoint(x: 5, y: 5)))
-        XCTAssertEqual(m.pendingTextStyle?.fontSize, 36) // medium 18pt × 2
+        XCTAssertEqual(m.pendingTextStyle?.fontSize, 28) // default small 14pt × 2
         m.finishText("hello")
         XCTAssertEqual(m.document.annotations.first?.text, "hello")
 
@@ -158,7 +158,7 @@ final class EditorModelTests: XCTestCase {
         _ = m.pointerDown(at: CGPoint(x: 50, y: 50))
         m.pointerUp()
         XCTAssertEqual(m.document.annotations[1].kind, .mosaicBrush)
-        XCTAssertEqual(m.document.annotations[1].style.lineWidth, 20)
+        XCTAssertEqual(m.document.annotations[1].style.lineWidth, 12)
     }
 
     func testWatermarkSetClearAndUndo() {

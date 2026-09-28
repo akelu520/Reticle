@@ -3,11 +3,12 @@ import Foundation
 
 /// Annotation tools on the main toolbar.
 public enum Tool: String, CaseIterable, Sendable {
-    case rect, ellipse, arrow, pen, highlight, mosaic, text, label
+    case rect, ellipse, line, arrow, pen, highlight, mosaic, text, label
 
     init(kind: AnnotationKind) {
         switch kind {
         case .rect: self = .rect
+        case .line: self = .line
         case .ellipse: self = .ellipse
         case .arrow: self = .arrow
         case .pen: self = .pen
@@ -78,7 +79,7 @@ public struct EditorModel {
     public init(scale: CGFloat) {
         self.scale = scale
         var p: [Tool: ToolPreset] = [:]
-        for t in Tool.allCases { p[t] = ToolPreset(color: .red, size: .medium) }
+        for t in Tool.allCases { p[t] = ToolPreset(color: .red, size: .small) }
         p[.highlight]?.color = .yellow
         presets = p
     }
@@ -95,7 +96,7 @@ public struct EditorModel {
     }
 
     public func preset(for tool: Tool) -> ToolPreset {
-        presets[tool] ?? ToolPreset(color: .red, size: .medium)
+        presets[tool] ?? ToolPreset(color: .red, size: .small)
     }
 
     /// Current options for the sub toolbar, reflecting the selected annotation if any.
@@ -112,7 +113,7 @@ public struct EditorModel {
         switch tool {
         case .highlight: return [10, 16, 24][size.rawValue]
         case .mosaic: return [12, 20, 32][size.rawValue]
-        default: return [2, 4, 8][size.rawValue]
+        default: return [3, 5, 8][size.rawValue]
         }
     }
 
@@ -209,6 +210,7 @@ public struct EditorModel {
             let kind: AnnotationKind
             switch tool {
             case .rect: kind = .rect
+            case .line: kind = .line
             case .ellipse: kind = .ellipse
             case .arrow: kind = .arrow
             case .pen: kind = .pen
@@ -254,7 +256,7 @@ public struct EditorModel {
         } else {
             let r = d.spanRect
             let minSize = 2 * scale
-            if d.kind == .arrow {
+            if d.kind == .arrow || d.kind == .line {
                 guard hypot(r.width, r.height) >= minSize * 2 else { return }
             } else {
                 guard r.width >= minSize, r.height >= minSize else { return }
@@ -266,7 +268,7 @@ public struct EditorModel {
 
     static func constrained(from s: CGPoint, to p: CGPoint, kind: AnnotationKind) -> CGPoint {
         let dx = p.x - s.x, dy = p.y - s.y
-        if kind == .arrow {
+        if kind == .arrow || kind == .line {
             let angle = (atan2(dy, dx) / (.pi / 4)).rounded() * (.pi / 4)
             let len = hypot(dx, dy)
             return CGPoint(x: s.x + cos(angle) * len, y: s.y + sin(angle) * len)

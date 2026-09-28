@@ -2,7 +2,7 @@ import AppKit
 import ReticleCore
 
 /// Result of a scroll capture. Bottom bar: 编辑 / 保存 /
-/// 取消 / 保存到剪切板. 编辑 swaps in the annotation toolbar; the whole long
+/// 取消 / 保存到剪贴板. 编辑 swaps in the annotation toolbar; the whole long
 /// image is editable inside a scroll view.
 @MainActor
 final class LongImageWindow: NSWindow, NSWindowDelegate {
@@ -57,7 +57,7 @@ final class LongImageWindow: NSWindow, NSWindowDelegate {
 
         resultBar = FloatingPanelView(spacing: 4)
         for (symbol, tip, action) in [("pencil", "编辑", #selector(startEditing)), ("arrow.down.to.line", "保存", #selector(save)),
-                                      ("xmark", "取消", #selector(cancel)), ("checkmark", "保存到剪切板", #selector(copyToPasteboard))] {
+                                      ("xmark", "取消", #selector(cancel)), ("checkmark", "保存到剪贴板", #selector(copyToPasteboard))] {
             let b = IconButton(symbol: symbol, tip: tip) { [weak self] in _ = self?.perform(action) }
             if action == #selector(copyToPasteboard) { b.baseTint = Palette.accent }
             resultBar.stack.addArrangedSubview(b)

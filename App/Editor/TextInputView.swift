@@ -33,9 +33,11 @@ final class TextInputView: NSTextView {
             backgroundColor = bubble
             layer?.cornerRadius = fontSize * 0.3
         } else {
+            // Text being typed sits in a thin accent outline.
             drawsBackground = false
-            layer?.borderColor = NSColor(white: 1, alpha: 0.8).cgColor
+            layer?.borderColor = Palette.accent.cgColor
             layer?.borderWidth = 1
+            layer?.cornerRadius = 3
         }
     }
 

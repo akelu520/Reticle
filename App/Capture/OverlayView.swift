@@ -22,7 +22,13 @@ final class OverlayView: NSView {
     private let dimLayer = CAShapeLayer()
     private let borderLayer = CAShapeLayer()
     private let handlesLayer = CAShapeLayer()
+    /// Blue tint over the window under the cursor before a selection exists.
+    private let hoverFillLayer = CAShapeLayer()
     private let chrome = LayerHostView()
+    private let caret = CaretView()
+    /// User drags of the ⠿ handles, kept for the session.
+    private var toolbarOffset = CGVector.zero
+    private static var modeBarOffset = CGVector.zero
     private let sizeLabel = SizeLabel()
     private let magnifier: MagnifierView
     private lazy var editor: AnnotationEditor = {
@@ -35,12 +41,28 @@ final class OverlayView: NSView {
         undo: { [weak self] in self?.editor.undo() },
         watermark: { [weak self] in self?.editor.toggleWatermarkPanel() },
         pin: { [weak self] in self.map { $0.session.pin(from: $0) } },
+        translate: { [weak self] in self?.startRecognition(translate: true) },
+        chooseTranslateLanguage: { [weak self] in self?.showTranslateLanguages(from: $0) },
         recognizeText: { [weak self] in self?.startRecognition() },
         scrollCapture: { [weak self] in self.map { $0.session.startScrollCapture(from: $0) } },
         cancel: { [weak self] in self?.session.cancel() },
         save: { [weak self] in self.map { $0.session.save(from: $0) } },
         copy: { [weak self] in self.map { $0.session.copy(from: $0) } }))
-    private lazy var modeBar = ModeBar { [weak self] in self?.session.setMode($0) }
+    private func toolbarDragged(_ d: CGVector) {
+        toolbarOffset.dx += d.dx
+        toolbarOffset.dy += d.dy
+        layoutPanels()
+    }
+
+    private lazy var modeBar: ModeBar = {
+        let bar = ModeBar { [weak self] in self?.session.setMode($0) }
+        bar.onDrag = { [weak self] d in
+            Self.modeBarOffset.dx += d.dx
+            Self.modeBarOffset.dy += d.dy
+            self?.layoutModeBar()
+        }
+        return bar
+    }()
     private lazy var recordStartBar = RecordStartBar(
         onStart: { [weak self] format in
             guard let self else { return }
@@ -78,12 +100,14 @@ final class OverlayView: NSView {
         dimLayer.fillRule = .evenOdd
         borderLayer.fillColor = nil
         borderLayer.strokeColor = Palette.accent.cgColor
-        handlesLayer.fillColor = NSColor.white.cgColor
-        handlesLayer.strokeColor = Palette.accent.cgColor
+        // Handles: accent dots with a white ring.
+        handlesLayer.fillColor = Palette.accent.cgColor
+        handlesLayer.strokeColor = NSColor.white.cgColor
         handlesLayer.lineWidth = 1
+        hoverFillLayer.fillColor = Palette.accent.withAlphaComponent(0.22).cgColor
         chrome.frame = bounds
         chrome.autoresizingMask = [.width, .height]
-        for l in [dimLayer, borderLayer, handlesLayer] {
+        for l in [dimLayer, hoverFillLayer, borderLayer, handlesLayer] {
             l.actions = ["path": NSNull(), "hidden": NSNull(), "lineWidth": NSNull()]
             chrome.hostedLayer.addSublayer(l)
         }
@@ -98,6 +122,7 @@ final class OverlayView: NSView {
 
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect, .cursorUpdate],
                                        owner: self, userInfo: nil))
+        toolbar.onDrag = { [weak self] in self?.toolbarDragged($0) }
         updateChrome()
         #if DEBUG
         Self.debugLive.append(Weak(self))
@@ -264,6 +289,9 @@ final class OverlayView: NSView {
             return
         }
         magnifier.isHidden = true
+        #if DEBUG
+        DispatchQueue.main.async { [weak self] in self?.debugDumpLayout() }
+        #endif
         let created: Bool
         if case .create = drag { created = true } else { created = false }
         drag = nil
@@ -278,6 +306,14 @@ final class OverlayView: NSView {
 
     override func keyDown(with event: NSEvent) {
         if editor.handleKey(event) { return }
+        // ⌘C while the loupe shows: copy the color under the cursor, then leave.
+        if event.keyCode == 8, event.modifierFlags.contains(.command), !magnifier.isHidden, selection == nil || drag != nil {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(magnifier.colorString, forType: .string)
+            session.cancel()
+            return
+        }
         switch Int(event.keyCode) {
         case 53: // Esc
             session.cancel()
@@ -292,6 +328,15 @@ final class OverlayView: NSView {
         }
     }
 
+    /// Shift toggles the loupe between RGB and HEX.
+    override func flagsChanged(with event: NSEvent) {
+        let shift = event.modifierFlags.contains(.shift)
+        if shift, !shiftDown { magnifier.showsHex.toggle() }
+        shiftDown = shift
+    }
+
+    private var shiftDown = false
+
     private func nudge(dx: CGFloat, dy: CGFloat) {
         guard let sel = selection else { return }
         selection = SelectionGeometry.move(sel, by: CGVector(dx: dx, dy: dy), within: bounds)
@@ -299,13 +344,36 @@ final class OverlayView: NSView {
     }
 
     private func editorChanged() {
-        toolbar.update(tool: editor.tool, canUndo: editor.canUndo, watermarkActive: editor.watermarkActive)
+        // With a drawing tool active the selection shows only its outline, no handles.
+        handlesLayer.isHidden = selection == nil || editor.tool != nil
+        #if DEBUG
+        defer { DispatchQueue.main.async { [weak self] in self?.debugDumpLayout() } }
+        #endif
+        toolbar.update(.init(tool: editor.tool, canUndo: editor.canUndo, watermarkActive: editor.watermarkActive,
+                             hasText: true, hasQRCode: false, canScrollCapture: editor.model.document.annotations.isEmpty))
         if drag == nil { layoutPanels() }
+    }
+
+    /// 翻译 ▾: pick the target language.
+    private func showTranslateLanguages(from button: NSView) {
+        let menu = NSMenu()
+        for (code, name) in TranslationLanguages.all {
+            let item = NSMenuItem(title: name, action: #selector(pickTranslateLanguage(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = code
+            item.state = code == Preferences.translationTarget ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: button.bounds.maxY + 4), in: button)
+    }
+
+    @objc private func pickTranslateLanguage(_ item: NSMenuItem) {
+        Preferences.translationTarget = item.representedObject as? String
     }
 
     // MARK: - Text recognition
 
-    private func startRecognition() {
+    private func startRecognition(translate: Bool = false) {
         editor.commitTextInput()
         editor.closeWatermarkPanel()
         guard let selection,
@@ -326,6 +394,7 @@ final class OverlayView: NSView {
                 let text = try await WorkerClient.recognizeText(in: image)
                 guard let self, self.recognitionToken == token else { return }
                 panel.show(text: text)
+                if translate { panel.translateNow(to: Preferences.translationTarget) }
             } catch {
                 guard let self, self.recognitionToken == token else { return }
                 panel.show(error: error)
@@ -363,7 +432,16 @@ final class OverlayView: NSView {
         if let r = highlight, isActive { dim.addRect(r) }
         dimLayer.path = dim
 
-        if let r = highlight, isActive {
+        // Before selecting: the window under the cursor is tinted blue with a bold edge.
+        // Over the bare desktop (the whole screen) there is nothing to tint.
+        if selection == nil, let r = hoverRect, isActive, r != bounds {
+            hoverFillLayer.path = CGPath(rect: r, transform: nil)
+            hoverFillLayer.isHidden = false
+        } else {
+            hoverFillLayer.isHidden = true
+        }
+
+        if let r = highlight, isActive, selection != nil || r != bounds {
             borderLayer.isHidden = false
             borderLayer.lineWidth = selection == nil ? 3 : 1
             let inset = borderLayer.lineWidth / 2
@@ -376,10 +454,10 @@ final class OverlayView: NSView {
         if let sel = selection {
             let handles = CGMutablePath()
             for p in SelectionGeometry.handlePoints(for: sel).values {
-                handles.addEllipse(in: CGRect(x: p.x - 3.5, y: p.y - 3.5, width: 7, height: 7))
+                handles.addEllipse(in: CGRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6))
             }
             handlesLayer.path = handles
-            handlesLayer.isHidden = false
+            handlesLayer.isHidden = editor.tool != nil
             canvas.frame = sel
             canvas.isHidden = false
         } else {
@@ -388,11 +466,11 @@ final class OverlayView: NSView {
         }
 
         if let sel = selection {
-            let px = CoordinateSpace.pixelRect(fromPoints: sel, scale: scale)
-            sizeLabel.text = "\(Int(px.width)) × \(Int(px.height))"
+            // Size in points, "500 x 380", above the selection's top-left corner.
+            sizeLabel.text = "\(Int(sel.width.rounded())) x \(Int(sel.height.rounded()))"
             let size = sizeLabel.fittingSize
-            let y = sel.minY - size.height - 4 >= 0 ? sel.minY - size.height - 4 : sel.minY + 4
-            sizeLabel.frame = CGRect(x: min(sel.minX, bounds.maxX - size.width), y: y, width: size.width, height: size.height)
+            let y = sel.minY - size.height - 14 >= 0 ? sel.minY - size.height - 14 : sel.minY + 6
+            sizeLabel.frame = CGRect(x: min(max(sel.minX, 0), bounds.maxX - size.width), y: y, width: size.width, height: size.height)
             sizeLabel.isHidden = false
         } else {
             sizeLabel.isHidden = true
@@ -439,32 +517,48 @@ final class OverlayView: NSView {
             place(recordStartBar, near: sel)
         case .screenshot:
             scrollStartBar.isHidden = true
-            let origin = place(toolbar, near: sel)
-            guard let panel = editor.secondaryPanel(in: self) else { return }
+            let origin = place(toolbar, near: sel, offset: toolbarOffset)
+            guard let panel = editor.secondaryPanel(in: self) else {
+                caret.isHidden = true
+                return
+            }
             let ps = panel.fittingSize
             // Below the toolbar when the toolbar sits below the selection, otherwise above it.
             let below = origin.y >= sel.maxY
-            var y = below ? toolbar.frame.maxY + Self.panelGap : toolbar.frame.minY - Self.panelGap - ps.height
-            if y + ps.height > bounds.maxY { y = toolbar.frame.minY - Self.panelGap - ps.height }
-            if y < bounds.minY { y = toolbar.frame.maxY + Self.panelGap }
-            let x = min(max(toolbar.frame.minX, bounds.minX), bounds.maxX - ps.width)
+            let gap = Self.panelGap + SubToolbar.caretHeight
+            var y = below ? toolbar.frame.maxY + gap : toolbar.frame.minY - gap - ps.height
+            if y + ps.height > bounds.maxY { y = toolbar.frame.minY - gap - ps.height }
+            if y < bounds.minY { y = toolbar.frame.maxY + gap }
+            // Start the panel near the tool it belongs to, with a caret pointing at the tool.
+            let anchor = editor.watermarkPanelOpen ? toolbar.watermarkAnchor(in: self)
+                : editor.tool.flatMap { toolbar.anchor(of: $0, in: self) } ?? CGPoint(x: toolbar.frame.minX + 40, y: toolbar.frame.midY)
+            let x = min(max(anchor.x - 36, toolbar.frame.minX, bounds.minX), bounds.maxX - ps.width)
             panel.frame = CGRect(x: x, y: y, width: ps.width, height: ps.height)
+            let caretBelowToolbar = y > toolbar.frame.midY
+            if caret.superview == nil { addSubview(caret) }
+            caret.frame = CGRect(x: anchor.x - 7, y: caretBelowToolbar ? y - SubToolbar.caretHeight : y + ps.height,
+                                 width: 14, height: SubToolbar.caretHeight)
+            caret.pointsUp = caretBelowToolbar
+            caret.isHidden = false
+            addSubview(caret, positioned: .above, relativeTo: panel)
         }
     }
 
     @discardableResult
-    private func place(_ bar: NSView, near sel: CGRect) -> CGPoint {
+    private func place(_ bar: NSView, near sel: CGRect, offset: CGVector = .zero) -> CGPoint {
         if bar.superview == nil { addSubview(bar) }
         let size = bar.fittingSize
-        let origin = SelectionGeometry.toolbarOrigin(for: sel, toolbar: size, within: bounds)
+        var origin = SelectionGeometry.toolbarOrigin(for: sel, toolbar: size, within: bounds)
+        origin.x = min(max(origin.x + offset.dx, bounds.minX), bounds.maxX - size.width)
+        origin.y = min(max(origin.y + offset.dy, bounds.minY), bounds.maxY - size.height)
         bar.frame = CGRect(origin: origin, size: size)
         bar.isHidden = false
         return origin
     }
 
-    /// Mode switcher at the top center, only before a selection exists.
+    /// Mode switcher at the top (draggable), only before a selection exists.
     private func layoutModeBar() {
-        let visible = selection == nil && isActive && drag == nil && session.mode != .record
+        let visible = selection == nil && isActive && drag == nil
         if visible, modeBar.superview == nil {
             addSubview(modeBar)
             modeBar.update(mode: session.mode)
@@ -472,10 +566,13 @@ final class OverlayView: NSView {
         guard modeBar.superview != nil else { return }
         modeBar.isHidden = !visible
         let size = modeBar.fittingSize
-        modeBar.frame = CGRect(x: (bounds.width - size.width) / 2, y: 12, width: size.width, height: size.height)
+        let x = min(max((bounds.width - size.width) / 2 + Self.modeBarOffset.dx, 0), bounds.width - size.width)
+        let y = min(max(4 + Self.modeBarOffset.dy, 0), bounds.height - size.height)
+        modeBar.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     private func hideSelectionPanels() {
+        caret.isHidden = true
         textPanel?.isHidden = true
         toolbar.isHidden = true
         scrollStartBar.isHidden = true
@@ -488,19 +585,20 @@ final class OverlayView: NSView {
         hideSelectionPanels()
     }
 
+    /// The loupe sits to the lower left of the cursor, flipping when it would leave the screen.
     private func showMagnifier(at p: CGPoint) {
         magnifier.isHidden = false
-        magnifier.update(cursor: p, selectionSize: selection.map { CoordinateSpace.pixelRect(fromPoints: $0, scale: scale).size })
+        magnifier.update(cursor: p)
         let size = magnifier.frame.size
-        var origin = CGPoint(x: p.x + 20, y: p.y + 20)
-        if origin.x + size.width > bounds.maxX { origin.x = p.x - 20 - size.width }
-        if origin.y + size.height > bounds.maxY { origin.y = p.y - 20 - size.height }
+        var origin = CGPoint(x: p.x - 10 - size.width, y: p.y + 10)
+        if origin.x < bounds.minX { origin.x = p.x + 10 }
+        if origin.y + size.height > bounds.maxY { origin.y = p.y - 10 - size.height }
         magnifier.setFrameOrigin(origin)
     }
 
     private func updateCursor(at p: CGPoint) {
         guard let sel = selection else {
-            NSCursor.crosshair.set()
+            CaptureCursor.reticle.set()
             return
         }
         if let h = SelectionGeometry.handle(at: p, in: sel) {
@@ -531,6 +629,22 @@ final class OverlayView: NSView {
 
     #if DEBUG
     func debugStartRecognition() { startRecognition() }
+
+    /// `RETICLE_LAYOUT_OUT=file`: writes each visible toolbar control's center (CG global points) as "name x y" lines.
+    func debugDumpLayout() {
+        guard let out = ProcessInfo.processInfo.environment["RETICLE_LAYOUT_OUT"], let window else { return }
+        var lines: [String] = []
+        func visit(_ v: NSView) {
+            if !v.isHiddenOrHasHiddenAncestor, let name = (v as? IconButton)?.tip ?? (v as? ModeButton)?.title ?? (v is ColorSwatch || v is SizeDot ? v.accessibilityLabel() ?? "swatch" : nil) {
+                let r = window.convertToScreen(v.convert(v.bounds, to: nil))
+                let primary = NSScreen.screens.first?.frame.height ?? 0
+                lines.append("\(name) \(r.midX) \(primary - r.midY)")
+            }
+            v.subviews.forEach(visit)
+        }
+        visit(self)
+        try? lines.joined(separator: "\n").write(toFile: out, atomically: true, encoding: .utf8)
+    }
     var debugHoverRect: CGRect? { hoverRect }
     var debugEditor: AnnotationEditor { editor }
 
@@ -612,21 +726,47 @@ final class SizeLabel: NSView {
 
     init() {
         super.init(frame: .zero)
+        // White badge, dark text: "500 x 380".
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.75).cgColor
+        layer?.backgroundColor = NSColor.white.cgColor
         layer?.cornerRadius = 4
-        field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        field.textColor = .white
+        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        field.textColor = Palette.icon
         field.translatesAutoresizingMaskIntoConstraints = false
         addSubview(field)
         NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            field.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            field.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Capture cursor: a crosshair through a small circle, outlined so it reads on any background.
+enum CaptureCursor {
+    static let reticle: NSCursor = {
+        let size = CGSize(width: 24, height: 24)
+        let image = NSImage(size: size, flipped: false) { r in
+            let c = CGPoint(x: r.midX, y: r.midY)
+            func strokes(_ path: NSBezierPath) {
+                path.lineWidth = 3
+                NSColor.black.withAlphaComponent(0.55).setStroke()
+                path.stroke()
+                path.lineWidth = 1.2
+                NSColor.white.setStroke()
+                path.stroke()
+            }
+            let cross = NSBezierPath()
+            cross.move(to: CGPoint(x: c.x, y: r.minY + 1)); cross.line(to: CGPoint(x: c.x, y: r.maxY - 1))
+            cross.move(to: CGPoint(x: r.minX + 1, y: c.y)); cross.line(to: CGPoint(x: r.maxX - 1, y: c.y))
+            strokes(cross)
+            strokes(NSBezierPath(ovalIn: CGRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10)))
+            return true
+        }
+        return NSCursor(image: image, hotSpot: CGPoint(x: 12, y: 12))
+    }()
 }

@@ -41,10 +41,10 @@ final class SelectionGeometryTests: XCTestCase {
     func testToolbarPlacementPrefersBelowThenAboveThenInside() {
         let size = CGSize(width: 300, height: 40)
         let below = SelectionGeometry.toolbarOrigin(for: CGRect(x: 100, y: 100, width: 400, height: 200), toolbar: size, within: bounds)
-        XCTAssertEqual(below, CGPoint(x: 200, y: 308))
+        XCTAssertEqual(below, CGPoint(x: 200, y: 314))
         let above = SelectionGeometry.toolbarOrigin(for: CGRect(x: 100, y: 500, width: 400, height: 280), toolbar: size, within: bounds)
-        XCTAssertEqual(above, CGPoint(x: 200, y: 452))
+        XCTAssertEqual(above, CGPoint(x: 200, y: 446))
         let inside = SelectionGeometry.toolbarOrigin(for: bounds, toolbar: size, within: bounds)
-        XCTAssertEqual(inside, CGPoint(x: 692, y: 752))
+        XCTAssertEqual(inside, CGPoint(x: 686, y: 746))
     }
 }

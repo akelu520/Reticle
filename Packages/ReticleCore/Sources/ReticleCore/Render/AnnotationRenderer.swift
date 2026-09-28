@@ -25,7 +25,14 @@ public enum AnnotationRenderer {
         case .rect:
             ctx.setStrokeColor(s.color.cgColor)
             ctx.setLineWidth(s.lineWidth)
-            ctx.stroke(a.spanRect)
+            ctx.addPath(ShapePaths.roundedRect(a.spanRect, lineWidth: s.lineWidth))
+            ctx.strokePath()
+        case .line:
+            ctx.setStrokeColor(s.color.cgColor)
+            ctx.setLineWidth(s.lineWidth)
+            ctx.move(to: a.points.first ?? .zero)
+            ctx.addLine(to: a.points.last ?? .zero)
+            ctx.strokePath()
         case .ellipse:
             ctx.setStrokeColor(s.color.cgColor)
             ctx.setLineWidth(s.lineWidth)
@@ -67,28 +74,23 @@ public enum AnnotationRenderer {
         }
     }
 
-    static func drawLabel(_ a: Annotation, in ctx: CGContext) {
+    /// Colored anchor dot, then a dark slate bubble with a notch pointing at it and white text.
+    /// `drawText: false` draws only the dot and bubble (the editor overlays a live text field).
+    public static func drawLabel(_ a: Annotation, drawText: Bool = true, in ctx: CGContext) {
         let l = LabelLayout(annotation: a)
-        let color = a.style.color
-        ctx.setStrokeColor(color.cgColor)
-        ctx.setLineWidth(max(a.style.fontSize * 0.08, 1))
-        ctx.move(to: l.lineStart)
-        ctx.addLine(to: l.lineEnd)
-        ctx.strokePath()
-
-        ctx.setFillColor(color.cgColor)
-        let radius = l.bubble.height * 0.25
-        ctx.addPath(CGPath(roundedRect: l.bubble, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        ctx.setFillColor(RGBA.slate.cgColor)
+        ctx.addPath(l.bubblePath)
         ctx.fillPath()
 
-        // Dot with a white ring so it stays visible on any background.
-        ctx.setFillColor(RGBA.white.cgColor)
-        ctx.fillEllipse(in: l.dot.insetBy(dx: -l.dot.width * 0.2, dy: -l.dot.height * 0.2))
-        ctx.setFillColor(color.cgColor)
+        // Dot with a soft white ring so it stays visible on any background.
+        ctx.setFillColor(RGBA.white.withAlpha(0.9).cgColor)
+        ctx.fillEllipse(in: l.dot.insetBy(dx: -l.dot.width * 0.15, dy: -l.dot.height * 0.15))
+        ctx.setFillColor(a.style.color.cgColor)
         ctx.fillEllipse(in: l.dot)
 
-        let textColor: RGBA = color.isLight ? .black : .white
-        TextMetrics.draw(a.text, at: l.textOrigin, fontSize: a.style.fontSize, color: textColor, in: ctx)
+        if drawText {
+            TextMetrics.draw(a.text, at: l.textOrigin, fontSize: a.style.fontSize, color: .white, in: ctx)
+        }
     }
 
     /// Tiles the watermark text across `area`, rotated −30°.

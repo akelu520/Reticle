@@ -70,15 +70,15 @@ enum EndToEndTests {
         check("悬停识别窗口", approx(v.debugHoverRect, win), "\(String(describing: v.debugHoverRect))")
         mouse(v, .mouseMoved, CGPoint(x: b.width * 0.8, y: b.height * 0.8))
         check("悬停空白处高亮整屏", v.debugHoverRect == b)
-        check("顶部模式栏显示 截图/滚动截图/提取文字",
-              ["截图", "滚动截图", "提取文字"].allSatisfy { visibleButton(in: v, title: $0) != nil })
+        check("顶部模式栏显示 截图/滚动截图/录屏/提取文字，当前为截图",
+              ["截图", "滚动截图", "录屏", "提取文字"].allSatisfy { visibleMode(in: v, $0) != nil } && visibleMode(in: v, "截图")?.isCurrent == true)
 
         let other = await startSession(.screenshot) ?? v
         click(other, CGPoint(x: win.midX, y: win.midY)) // no mouse move first: must still snap to the window
         check("单击选中窗口（未先移动鼠标）", approx(other.selection, win), "\(String(describing: other.selection))")
         v = other
-        check("出现主工具栏", visibleButton(in: v, tip: "保存到剪切板") != nil)
-        check("模式栏在选区后隐藏", visibleButton(in: v, title: "滚动截图") == nil)
+        check("出现主工具栏", visibleButton(in: v, tip: "保存到剪贴板") != nil)
+        check("模式栏在选区后隐藏", visibleMode(in: v, "滚动截图") == nil)
 
         drag(v, from: CGPoint(x: win.maxX, y: win.maxY), to: CGPoint(x: win.maxX + 50, y: win.maxY + 30))
         check("拖动右下角手柄调整大小", approx(v.selection?.size, CGSize(width: win.width + 50, height: win.height + 30)), "\(String(describing: v.selection))")
@@ -99,8 +99,7 @@ enum EndToEndTests {
         drag(v2, from: dragged.origin, to: CGPoint(x: dragged.maxX, y: dragged.maxY))
         check("拖拽框选任意区域", v2.selection == dragged, "\(String(describing: v2.selection))")
         let sizeBadge = descendants(of: v2, SizeLabel.self).first
-        let px = CoordinateSpace.pixelRect(fromPoints: dragged, scale: v2.snapshot.scale)
-        check("尺寸标签显示像素", sizeBadge?.text == "\(Int(px.width)) × \(Int(px.height))", sizeBadge?.text ?? "nil")
+        check("尺寸标签显示点数 “W x H”", sizeBadge?.text == "\(Int(dragged.width)) x \(Int(dragged.height))", sizeBadge?.text ?? "nil")
         key(v2, 53)
         check("Esc 取消截图", await waitUntil { overlay() == nil })
     }
@@ -280,7 +279,7 @@ enum EndToEndTests {
         drag(v, from: textRegion.origin, to: CGPoint(x: textRegion.maxX, y: textRegion.maxY))
         let recognized = await waitUntil(timeout: 15) { panelText(v)?.contains("Reticle demo") == true }
         check("框选后自动识别文字", recognized, panelText(v) ?? "nil")
-        check("提取文字模式不显示截图工具栏", visibleButton(in: v, tip: "保存到剪切板") == nil)
+        check("提取文字模式不显示截图工具栏", visibleButton(in: v, tip: "保存到剪贴板") == nil)
         press(v, title: "复制")
         check("复制全文", NSPasteboard.general.string(forType: .string)?.contains("Reticle demo") == true)
 
@@ -313,7 +312,7 @@ enum EndToEndTests {
         drag(v, from: CGPoint(x: b.width * 0.3, y: b.height * 0.2), to: CGPoint(x: b.width * 0.6, y: b.height * 0.7))
         check("滚动截图：框选后显示提示和开始按钮", visibleButton(in: v, title: "开始滚动截图") != nil
               && descendants(of: v, NSTextField.self).contains { $0.stringValue.contains("只框选会滚动的内容") && !$0.isHiddenOrHasHiddenAncestor })
-        check("滚动截图模式不显示截图工具栏", visibleButton(in: v, tip: "保存到剪切板") == nil)
+        check("滚动截图模式不显示截图工具栏", visibleButton(in: v, tip: "保存到剪贴板") == nil)
         press(v, title: "开始滚动截图")
         check("开始后关闭冻结遮罩", await waitUntil { overlay() == nil })
         let panel = await waitFor { NSApp.windows.compactMap { $0 as? ScrollControlPanel }.first { $0.isVisible } }
@@ -343,7 +342,7 @@ enum EndToEndTests {
             check("长图窗口打开", false)
             return
         }
-        check("长图窗口：编辑/保存/取消/保存到剪切板", ["编辑", "保存", "取消", "保存到剪切板"].allSatisfy { visibleButton(in: content, tip: $0) != nil })
+        check("长图窗口：编辑/保存/取消/保存到剪切板", ["编辑", "保存", "取消", "保存到剪贴板"].allSatisfy { visibleButton(in: content, tip: $0) != nil })
         press(content, tip: "编辑")
         check("点编辑出现标注工具栏（无固定/提取文字/滚动截图）",
               visibleButton(in: content, tip: "矩形") != nil && visibleButton(in: content, tip: "固定到屏幕") == nil)
@@ -356,14 +355,14 @@ enum EndToEndTests {
         check("下载弹出保存面板", await waitUntil { w.attachedSheet != nil })
         if let sheet = w.attachedSheet { w.endSheet(sheet, returnCode: .cancel) }
         _ = await waitUntil { w.attachedSheet == nil }
-        press(content, tip: "保存到剪切板")
+        press(content, tip: "保存到剪贴板")
         check("长图保存到剪切板（原尺寸）", pasteboardImage().map { CGSize(width: $0.width, height: $0.height) } == CGSize(width: 1200, height: 2400))
         check("保存到剪切板后关闭窗口", await waitUntil { !w.isVisible })
     }
 
     static func testRecording() async {
         guard let v = await startSession(.record) else { return }
-        check("录屏模式不显示顶部模式栏", visibleButton(in: v, title: "滚动截图") == nil)
+        check("录屏模式下模式栏选中“录屏”", visibleMode(in: v, "录屏")?.isCurrent == true)
         let b = v.bounds
         drag(v, from: CGPoint(x: b.width * 0.3, y: b.height * 0.3), to: CGPoint(x: b.width * 0.6, y: b.height * 0.6))
         let segmented = descendants(of: v, NSSegmentedControl.self).first { !$0.isHiddenOrHasHiddenAncestor }
@@ -579,7 +578,7 @@ enum EndToEndTests {
         let long = await waitFor(timeout: 10) { NSApp.windows.compactMap { $0 as? LongImageWindow }.first { $0.isVisible } }
         check("真实滚动截图：完成后打开长图窗口", long != nil)
         if let long, let content = long.contentView {
-            press(content, tip: "保存到剪切板")
+            press(content, tip: "保存到剪贴板")
             let image = pasteboardImage()
             let regionPx = CoordinateSpace.pixelRect(fromPoints: region, scale: screen.backingScaleFactor)
             // 7 s at ~180 pt/s ≈ 1260 pt ≈ 2520 px of new content on a 2× screen.
@@ -729,6 +728,10 @@ enum EndToEndTests {
 
     /// Clicks a button found by tooltip or title (buttons track the mouse modally, so use performClick).
     private static func press(_ root: NSView, tip: String? = nil, title: String? = nil) {
+        if let title, tip == nil, let mode = visibleMode(in: root, title) {
+            mode.performClick()
+            return
+        }
         let button = tip.flatMap { visibleButton(in: root, tip: $0) } ?? title.flatMap { visibleButton(in: root, title: $0) }
         guard let button else {
             check("找到按钮 \(tip ?? title ?? "")", false)
@@ -738,11 +741,15 @@ enum EndToEndTests {
     }
 
     private static func visibleButton(in root: NSView, tip: String) -> NSButton? {
-        descendants(of: root, NSButton.self).first { $0.toolTip == tip && !$0.isHiddenOrHasHiddenAncestor }
+        descendants(of: root, NSButton.self).first { (($0 as? IconButton)?.tip ?? $0.toolTip) == tip && !$0.isHiddenOrHasHiddenAncestor }
     }
 
     private static func visibleButton(in root: NSView, title: String) -> NSButton? {
         descendants(of: root, NSButton.self).first { $0.title == title && !$0.isHiddenOrHasHiddenAncestor }
+    }
+
+    private static func visibleMode(in root: NSView, _ title: String) -> ModeButton? {
+        descendants(of: root, ModeButton.self).first { $0.title == title && !$0.isHiddenOrHasHiddenAncestor }
     }
 
     private static func descendants<T: NSView>(of root: NSView, _ type: T.Type) -> [T] {

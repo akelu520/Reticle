@@ -22,6 +22,12 @@ public enum ShapePaths {
         return path
     }
 
+    /// Rectangle outline with corners rounded in proportion to the stroke.
+    public static func roundedRect(_ r: CGRect, lineWidth: CGFloat) -> CGPath {
+        let radius = min(lineWidth * 2, r.width / 2, r.height / 2)
+        return CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil)
+    }
+
     /// Smoothed freehand path through the sampled points (quadratic curves via midpoints).
     public static func stroke(_ points: [CGPoint]) -> CGPath {
         let path = CGMutablePath()

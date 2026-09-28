@@ -2,7 +2,8 @@ import AppKit
 import ReticleCore
 
 /// Options for the active tool or the selected annotation: line width (or font
-/// size / mosaic mode) on the left, colors on the right.
+/// size / mosaic mode) on the left, colors on the right. A small caret on the
+/// top edge points at the tool it belongs to.
 final class SubToolbar: FloatingPanelView {
     struct Actions {
         var setSize: (SizeLevel) -> Void
@@ -14,7 +15,7 @@ final class SubToolbar: FloatingPanelView {
 
     init(actions: Actions) {
         self.actions = actions
-        super.init(spacing: 4)
+        super.init(spacing: 8, insets: NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12))
     }
 
     private struct Config: Equatable {
@@ -64,11 +65,34 @@ final class SubToolbar: FloatingPanelView {
     }
 
     private func addSizeDots(selected: SizeLevel) {
-        for (level, d) in [(SizeLevel.small, 4.0), (.medium, 7.0), (.large, 11.0)] {
+        for (level, d) in [(SizeLevel.small, 5.0), (.medium, 9.0), (.large, 12.0)] {
             let dot = SizeDot(diameter: d) { [actions] in actions.setSize(level) }
             dot.isSelected = level == selected
-            dot.toolTip = ["细", "中", "粗"][level.rawValue]
+            dot.setAccessibilityLabel(["细", "中", "粗"][level.rawValue])
             stack.addArrangedSubview(dot)
         }
+    }
+
+    /// The caret sits just outside the panel's top edge, so it is drawn by a sibling (see `CaretView`).
+    static let caretHeight: CGFloat = 6
+}
+
+/// Small white triangle between the toolbar and a sub toolbar, pointing at the tool.
+final class CaretView: NSView {
+    /// True when the sub toolbar is below the toolbar (the caret points up).
+    var pointsUp = true { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.setFill()
+        let p = NSBezierPath()
+        let base = pointsUp ? bounds.maxY : 0, tip = pointsUp ? 0 : bounds.maxY
+        p.move(to: CGPoint(x: 0, y: base))
+        p.line(to: CGPoint(x: bounds.midX, y: tip))
+        p.line(to: CGPoint(x: bounds.maxX, y: base))
+        p.close()
+        p.fill()
     }
 }

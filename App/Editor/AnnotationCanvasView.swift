@@ -8,6 +8,8 @@ final class AnnotationCanvasView: NSView {
         var annotations: [Annotation]
         var watermark: Watermark?
         var selectedBounds: CGRect?
+        /// A label being typed: dot and bubble drawn here, text in the live field above.
+        var editingLabel: Annotation?
     }
 
     var content = Content(annotations: [], watermark: nil, selectedBounds: nil) { didSet { needsDisplay = true } }
@@ -39,7 +41,20 @@ final class AnnotationCanvasView: NSView {
         if let w = content.watermark {
             AnnotationRenderer.drawWatermark(w, in: CoordinateSpace.pixelRect(fromPoints: frame, scale: scale), ctx: ctx)
         }
+        if let label = content.editingLabel {
+            AnnotationRenderer.drawLabel(label, drawText: false, in: ctx)
+        }
         ctx.restoreGState()
+
+        if let label = content.editingLabel {
+            let b = LabelLayout(annotation: label).bounds
+            let r = CGRect(x: b.minX / scale - frame.minX, y: b.minY / scale - frame.minY, width: b.width / scale, height: b.height / scale)
+                .insetBy(dx: -6, dy: -6)
+            let path = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+            path.lineWidth = 1.5
+            Palette.accent.setStroke()
+            path.stroke()
+        }
 
         if let b = content.selectedBounds {
             let r = CGRect(x: b.minX / scale - frame.minX, y: b.minY / scale - frame.minY, width: b.width / scale, height: b.height / scale)

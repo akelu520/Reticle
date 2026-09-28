@@ -1,55 +1,66 @@
 import AppKit
 
-/// Zoomed pixel view next to the cursor: 15×15 source pixels at 8×, with a
-/// crosshair, plus the cursor coordinates or current selection size.
+/// Loupe beside the cursor: 17×17 source pixels enlarged to ~144 pt with a thin
+/// crosshair, and a dark panel below with the pixel coordinate, the color under
+/// the cursor, and the ⌘C / Shift hints.
 final class MagnifierView: NSView {
-    private static let samplePixels = 15
-    private static let zoom: CGFloat = 8
-    private static let infoHeight: CGFloat = 22
+    private static let samplePixels = 17
+    private static let zoom: CGFloat = 8.5
+    private static let infoHeight: CGFloat = 78
+    static var side: CGFloat { CGFloat(samplePixels) * zoom }
 
     private let image: CGImage
     private let scale: CGFloat
     private var center = CGPoint.zero
-    private var info = ""
+    /// Color under the cursor, 0–255.
+    private(set) var color: (r: Int, g: Int, b: Int) = (0, 0, 0)
+    /// Shift toggles between RGB and HEX.
+    var showsHex = false { didSet { needsDisplay = true } }
 
     init(image: CGImage, scale: CGFloat) {
         self.image = image
         self.scale = scale
-        let side = CGFloat(Self.samplePixels) * Self.zoom
-        super.init(frame: CGRect(x: 0, y: 0, width: side, height: side + Self.infoHeight))
+        super.init(frame: CGRect(x: 0, y: 0, width: Self.side, height: Self.side + Self.infoHeight))
         wantsLayer = true
-        layer?.cornerRadius = 4
+        layer?.cornerRadius = 2
         layer?.masksToBounds = true
-        layer?.borderColor = NSColor.white.cgColor
-        layer?.borderWidth = 1
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
     override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    /// - Parameters:
-    ///   - cursor: cursor position in screen-local points.
-    ///   - selectionSize: selection size in pixels while dragging, otherwise nil.
-    func update(cursor: CGPoint, selectionSize: CGSize?) {
+    /// The color as shown ("120,170,203" or "#78AACB"), for ⌘C.
+    var colorString: String {
+        showsHex ? String(format: "#%02X%02X%02X", color.r, color.g, color.b) : "\(color.r),\(color.g),\(color.b)"
+    }
+
+    /// - Parameter cursor: cursor position in screen-local points.
+    func update(cursor: CGPoint) {
         center = CGPoint(x: (cursor.x * scale).rounded(.down), y: (cursor.y * scale).rounded(.down))
-        if let s = selectionSize {
-            info = "\(Int(s.width)) × \(Int(s.height))"
-        } else {
-            info = "(\(Int(center.x)), \(Int(center.y)))"
-        }
+        color = Self.sample(image, at: center)
         needsDisplay = true
+    }
+
+    private static func sample(_ image: CGImage, at p: CGPoint) -> (Int, Int, Int) {
+        guard p.x >= 0, p.y >= 0, Int(p.x) < image.width, Int(p.y) < image.height,
+              let one = image.cropping(to: CGRect(x: p.x, y: p.y, width: 1, height: 1)) else { return (0, 0, 0) }
+        var px = [UInt8](repeating: 0, count: 4)
+        let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        ctx?.draw(one, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return (Int(px[0]), Int(px[1]), Int(px[2]))
     }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let n = Self.samplePixels
-        let side = CGFloat(n) * Self.zoom
-        let loupe = CGRect(x: 0, y: 0, width: side, height: side)
+        let side = Self.side
 
         NSColor.black.setFill()
-        bounds.fill()
+        CGRect(x: 0, y: 0, width: side, height: side).fill()
 
         // Sample the pixels around the cursor; parts outside the image stay black.
         let half = CGFloat(n / 2)
@@ -67,21 +78,44 @@ final class MagnifierView: NSView {
             ctx.restoreGState()
         }
 
-        // Crosshair through the center pixel.
+        // Thin crosshair through the center pixel, which is outlined.
         let c = half * Self.zoom
-        ctx.setFillColor(NSColor(srgbRed: 0x33 / 255, green: 0x70 / 255, blue: 1, alpha: 0.6).cgColor)
-        ctx.fill(CGRect(x: c, y: 0, width: Self.zoom, height: side))
-        ctx.fill(CGRect(x: 0, y: c, width: side, height: Self.zoom))
-        ctx.setStrokeColor(NSColor.white.cgColor)
+        ctx.setFillColor(Palette.accent.withAlphaComponent(0.75).cgColor)
+        ctx.fill(CGRect(x: c + Self.zoom / 2 - 1.5, y: 0, width: 3, height: side))
+        ctx.fill(CGRect(x: 0, y: c + Self.zoom / 2 - 1.5, width: side, height: 3))
+        let pixel = CGRect(x: c, y: c, width: Self.zoom, height: Self.zoom).insetBy(dx: 0.5, dy: 0.5)
+        ctx.setStrokeColor(NSColor.black.cgColor)
         ctx.setLineWidth(1)
-        ctx.stroke(CGRect(x: c, y: c, width: Self.zoom, height: Self.zoom).insetBy(dx: 0.5, dy: 0.5))
+        ctx.stroke(pixel)
+        ctx.setStrokeColor(NSColor.white.cgColor)
+        ctx.stroke(pixel.insetBy(dx: 1, dy: 1))
 
+        // Info panel.
+        let panel = CGRect(x: 0, y: side, width: side, height: Self.infoHeight)
+        NSColor(white: 0.08, alpha: 0.88).setFill()
+        panel.fill()
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+            .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
             .foregroundColor: NSColor.white,
         ]
-        let text = info as NSString
-        let size = text.size(withAttributes: attrs)
-        text.draw(at: CGPoint(x: (side - size.width) / 2, y: loupe.maxY + (Self.infoHeight - size.height) / 2), withAttributes: attrs)
+        let valueText = showsHex ? String(format: "HEX:#%02X%02X%02X", color.r, color.g, color.b) : "RGB:\(color.r),\(color.g),\(color.b)"
+        let lines = ["坐标: \(Int(center.x)),\(Int(center.y))", valueText, "按 ⌘ + C 复制色值", "按 Shift 切换 RGB/HEX"]
+        let lineHeight: CGFloat = 17.5
+        for (i, line) in lines.enumerated() {
+            let text = line as NSString
+            let size = text.size(withAttributes: attrs)
+            var x = (side - size.width) / 2
+            let y = panel.minY + 4 + CGFloat(i) * lineHeight + (lineHeight - size.height) / 2
+            if i == 1 {
+                // Swatch of the sampled color before the value.
+                x += 6
+                let swatch = CGRect(x: x - 12, y: y + (size.height - 8) / 2, width: 8, height: 8)
+                NSColor(srgbRed: CGFloat(color.r) / 255, green: CGFloat(color.g) / 255, blue: CGFloat(color.b) / 255, alpha: 1).setFill()
+                swatch.fill()
+                NSColor(white: 1, alpha: 0.6).setStroke()
+                NSBezierPath(rect: swatch.insetBy(dx: 0.5, dy: 0.5)).stroke()
+            }
+            text.draw(at: CGPoint(x: x, y: y), withAttributes: attrs)
+        }
     }
 }
