@@ -59,3 +59,22 @@ enum OCRCommand {
         dispatchMain()
     }
 }
+
+/// `scan <png>`: text and QR detection, one `ScanResult` JSON line on stdout (`{}` on failure).
+enum ScanCommand {
+    static func run(path: String) -> Never {
+        Task {
+            var data = Data("{}".utf8)
+            if let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+               let result = try? await ContentScanner.scan(image),
+               let encoded = try? JSONEncoder().encode(result) {
+                data = encoded
+            }
+            data.append(0x0A)
+            FileHandle.standardOutput.write(data)
+            exit(0)
+        }
+        dispatchMain()
+    }
+}

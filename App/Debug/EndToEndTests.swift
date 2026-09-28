@@ -333,6 +333,27 @@ enum EndToEndTests {
         press(v2, tip: "提取文字")
         check("工具栏入口提取文字", await waitUntil(timeout: 15) { panelText(v2)?.contains("Reticle demo") == true }, panelText(v2) ?? "nil")
         notes.append("提取文字后主进程内存 \(footprintMB()) MB（Vision 在 ReticleWorker 中，识别完即退出）")
+        check("含文字的选区：可提取文字，无二维码时识别二维码不可用",
+              await waitUntil(timeout: 10) { visibleButton(in: v2, tip: "识别二维码")?.isEnabled == false }
+              && visibleButton(in: v2, tip: "提取文字")?.isEnabled == true)
+        key(v2, 53)
+        _ = await waitUntil { overlay() == nil }
+
+        // The demo image has a QR code in the lower right (see scripts/e2e.sh).
+        guard let v3 = await startSession(.screenshot) else { return }
+        let b3 = v3.bounds
+        drag(v3, from: CGPoint(x: b3.maxX - 310, y: b3.maxY - 310), to: CGPoint(x: b3.maxX - 50, y: b3.maxY - 50))
+        let qrEnabled = await waitUntil(timeout: 10) { visibleButton(in: v3, tip: "识别二维码")?.isEnabled == true }
+        check("框选二维码后识别二维码可用", qrEnabled)
+        press(v3, tip: "识别二维码")
+        check("识别二维码：面板显示链接", panelText(v3) == "https://github.com/akelu520/Reticle"
+              && descendants(of: v3, NSTextField.self).contains { $0.stringValue == "识别二维码" && !$0.isHiddenOrHasHiddenAncestor },
+              panelText(v3) ?? "nil")
+        press(v3, tip: "关闭")
+        drag(v3, from: CGPoint(x: b3.width * 0.05, y: b3.height * 0.62), to: CGPoint(x: b3.width * 0.2, y: b3.height * 0.8))
+        check("空白选区：提取文字与识别二维码都不可用",
+              await waitUntil(timeout: 10) { visibleButton(in: v3, tip: "提取文字")?.isEnabled == false }
+              && visibleButton(in: v3, tip: "识别二维码")?.isEnabled == false)
     }
 
     static func testScrollCapture() async {

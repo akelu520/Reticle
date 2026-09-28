@@ -15,6 +15,7 @@ swiftc -O scripts/e2e-scroll-target.swift -o "$OUT/e2e-scroll-target"
 # A static demo screen for the deterministic sections.
 cat > "$OUT/make-demo.swift" <<'SWIFT'
 import AppKit
+import CoreImage
 // The primary display, same as the app's demo mode.
 let size = NSScreen.screens[0].frame.size, scale = NSScreen.screens[0].backingScaleFactor
 let w = Int(size.width * scale), h = Int(size.height * scale)
@@ -27,6 +28,13 @@ NSColor.systemRed.setFill(); NSRect(x: 0, y: size.height - 150, width: 300, heig
 let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 60), .foregroundColor: NSColor.black]
 ("TOP LEFT" as NSString).draw(at: NSPoint(x: 325, y: size.height - 100), withAttributes: attrs)
 ("Reticle demo" as NSString).draw(at: NSPoint(x: size.width * 0.3, y: size.height / 2), withAttributes: attrs)
+// A QR code in the lower right, for 识别二维码.
+let qr = CIFilter(name: "CIQRCodeGenerator")!
+qr.setValue(Data("https://github.com/akelu520/Reticle".utf8), forKey: "inputMessage")
+let code = qr.outputImage!.transformed(by: CGAffineTransform(scaleX: 7, y: 7))
+NSColor.white.setFill(); NSRect(x: size.width - 300, y: 60, width: 240, height: 240).fill()
+NSImage(cgImage: CIContext().createCGImage(code, from: code.extent)!, size: .zero)
+  .draw(in: NSRect(x: size.width - 280, y: 80, width: 200, height: 200))
 NSGraphicsContext.current = nil
 try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
 SWIFT

@@ -31,18 +31,29 @@ enum WorkerClient {
     // MARK: - OCR
 
     static func recognizeText(in image: CGImage) async throws -> String {
+        let response = try await imageCommand(.ocr, image, as: WorkerProtocol.OCRResponse.self)
+        if let error = response.error { throw NSError(domain: "ReticleWorker", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }
+        return response.text ?? ""
+    }
+
+    /// Whether `image` contains text, and any QR code payloads.
+    static func scan(_ image: CGImage) async throws -> ScanResult {
+        try await imageCommand(.scan, image, as: ScanResult.self)
+    }
+
+    /// Hands `image` to the worker as a temporary PNG and decodes its last stdout line.
+    private static func imageCommand<T: Decodable>(_ command: WorkerProtocol.Command, _ image: CGImage, as: T.Type) async throws -> T {
         guard let executable else { throw Failure.missingWorker }
-        let input = FileManager.default.temporaryDirectory.appendingPathComponent("reticle-ocr-\(UUID().uuidString).png")
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent("reticle-\(command.rawValue)-\(UUID().uuidString).png")
         guard let png = ImageEncoder.png(image) else { throw Failure.badResponse }
         try png.write(to: input)
         defer { try? FileManager.default.removeItem(at: input) }
 
-        let (status, output) = try await run(executable, [WorkerProtocol.Command.ocr.rawValue, input.path])
+        let (status, output) = try await run(executable, [command.rawValue, input.path])
         guard status == 0 else { throw Failure.crashed(status) }
         guard let line = output.split(separator: 0x0A).last,
-              let response = try? JSONDecoder().decode(WorkerProtocol.OCRResponse.self, from: Data(line)) else { throw Failure.badResponse }
-        if let error = response.error { throw NSError(domain: "ReticleWorker", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }
-        return response.text ?? ""
+              let response = try? JSONDecoder().decode(T.self, from: Data(line)) else { throw Failure.badResponse }
+        return response
     }
 
     /// Runs the worker to completion and returns its exit status and stdout.

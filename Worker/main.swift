@@ -5,7 +5,7 @@ import ReticleCore
 // See Shared/WorkerProtocol.swift for the commands.
 let arguments = Array(CommandLine.arguments.dropFirst())
 guard let first = arguments.first, let command = WorkerProtocol.Command(rawValue: first) else {
-    FileHandle.standardError.write(Data("usage: ReticleWorker ocr <png> | record <json> | preview <file> <mp4|gif>\n".utf8))
+    FileHandle.standardError.write(Data("usage: ReticleWorker ocr <png> | scan <png> | record <json> | preview <file> <mp4|gif>\n".utf8))
     exit(2)
 }
 
@@ -13,6 +13,10 @@ switch command {
 case .ocr:
     guard arguments.count == 2 else { exit(2) }
     OCRCommand.run(path: arguments[1])
+
+case .scan:
+    guard arguments.count == 2 else { exit(2) }
+    ScanCommand.run(path: arguments[1])
 
 case .record:
     guard arguments.count == 2,

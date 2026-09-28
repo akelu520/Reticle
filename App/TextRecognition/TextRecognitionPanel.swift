@@ -2,7 +2,7 @@ import AppKit
 import ReticleCore
 
 /// 提取文字面板：editable recognized text with clickable links, 复制 (full text),
-/// 关闭 (re-select), and 翻译 on macOS 15+.
+/// 关闭 (re-select), and 翻译 on macOS 15+. Also shows 识别二维码 results.
 final class TextRecognitionPanel: NSView, NSTextViewDelegate {
     struct Actions {
         var close: () -> Void
@@ -15,6 +15,7 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
     private let actions: Actions
     private let textView = PanelTextView()
     private let status = NSTextField(labelWithString: "")
+    private let titleLabel = NSTextField(labelWithString: "提取文字")
     private let copyButton = NSButton(title: "复制", target: nil, action: nil)
     private let translateButton = NSButton(title: "翻译", target: nil, action: nil)
     private let targetPopup = NSPopUpButton()
@@ -48,10 +49,9 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
     override func mouseDown(with event: NSEvent) {}
 
     private func build() {
-        let title = NSTextField(labelWithString: "提取文字")
-        title.font = .systemFont(ofSize: 13, weight: .semibold)
-        title.frame = CGRect(x: 14, y: 10, width: 200, height: 18)
-        addSubview(title)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.frame = CGRect(x: 14, y: 10, width: 200, height: 18)
+        addSubview(titleLabel)
 
         let close = IconButton(symbol: "xmark", tip: "关闭", size: 24) { [actions] in actions.close() }
         close.translatesAutoresizingMaskIntoConstraints = true
@@ -113,6 +113,12 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
             addSubview(downloadButton)
         }
         showLoading()
+    }
+
+    /// "提取文字" or "识别二维码".
+    var title: String {
+        get { titleLabel.stringValue }
+        set { titleLabel.stringValue = newValue }
     }
 
     func showLoading() {

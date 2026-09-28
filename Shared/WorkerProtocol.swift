@@ -11,6 +11,8 @@ enum WorkerProtocol {
     enum Command: String {
         /// `ocr <png path>` → one `OCRResponse` JSON line on stdout.
         case ocr
+        /// Text present? QR payloads? Answers with a `ScanResult` JSON line.
+        case scan
         /// `record <RecordRequest JSON>` → recording UI, preview, export; exits when the preview closes.
         case record
         /// `preview <mp4 path> <mp4|gif>` → preview window only (tests and re-opening a raw recording).
