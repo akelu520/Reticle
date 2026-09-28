@@ -215,7 +215,8 @@ enum EndToEndTests {
     }
 
     static func testOutputs() async {
-        let b = NSScreen.main?.frame.size ?? .zero
+        // Demo mode shows the static screen on the primary display.
+        let b = NSScreen.screens.first?.frame.size ?? .zero
         let win = CGRect(x: b.width * 0.1, y: b.height * 0.1, width: b.width * 0.4, height: b.height * 0.5)
 
         guard let v = await startSession(.screenshot) else { return }
@@ -255,7 +256,7 @@ enum EndToEndTests {
         let pin = NSApp.windows.compactMap { $0 as? PinWindow }.first { $0.isVisible }
         check("贴图窗口出现在原位置（误差 < 1pt）", pin.map { p in expected.map { abs(p.frame.minX - $0.minX) < 1 && abs(p.frame.minY - $0.minY) < 1 && abs(p.frame.width - $0.width) < 1 } ?? false } == true,
               "\(String(describing: pin?.frame)) vs \(String(describing: expected))")
-        check("贴图 1:1 像素显示", pin.map { $0.frame.width * 2 == CGFloat($0.image.width) } == true,
+        check("贴图 1:1 像素显示", pin.map { abs($0.frame.width * v.snapshot.scale - CGFloat($0.image.width)) < 1 } == true,
               "frame=\(String(describing: pin?.frame.size)) image=\(String(describing: pin.map { ($0.image.width, $0.image.height) }))")
         check("贴图浮在最上层、所有桌面可见", pin?.level == .floating && pin?.collectionBehavior.contains(.canJoinAllSpaces) == true)
         if let pin, let content = pin.contentView {
@@ -473,11 +474,14 @@ enum EndToEndTests {
         check("关闭菜单后释放缩略图", !menu.items.contains { $0.image != nil })
 
         guard let v2 = await startSession(.screenshot) else { return }
-        drag(v2, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 300, y: 260))
+        let pinRect = CGRect(x: 100, y: 100, width: 200, height: 160)
+        let pinPx = CoordinateSpace.pixelRect(fromPoints: pinRect, scale: v2.snapshot.scale)
+        drag(v2, from: pinRect.origin, to: CGPoint(x: pinRect.maxX, y: pinRect.maxY))
         press(v2, tip: "固定到屏幕")
         _ = await waitUntil { overlay() == nil }
         history.flush()
-        check("固定到屏幕也记入历史，最新在前", await waitUntil { history.entries.count == 2 } && history.entries.first?.pixelWidth == 400)
+        check("固定到屏幕也记入历史，最新在前", await waitUntil { history.entries.count == 2 } && history.entries.first?.pixelWidth == Int(pinPx.width),
+              "\(String(describing: history.entries.first?.pixelWidth)) vs \(pinPx.width)")
         NSApp.windows.compactMap { $0 as? PinWindow }.forEach { $0.dismiss() }
 
         Preferences.historyEnabled = false
@@ -518,11 +522,29 @@ enum EndToEndTests {
         // 1. Real screenshot with window snapping onto the helper window.
         var helper = launchHelper(delay: 30, seconds: 0)
         try? await Task.sleep(nanoseconds: 1_500_000_000)
-        guard let v = await startSession(.screenshot) else { helper?.terminate(); return }
+        guard var v = await startSession(.screenshot) else { helper?.terminate(); return }
         let screen = v.snapshot.screen
         check("真实截屏：图像为屏幕像素尺寸", v.snapshot.image.width == Int(screen.frame.width * screen.backingScaleFactor),
               "\(v.snapshot.image.width) vs \(screen.frame.width * screen.backingScaleFactor)")
         check("真实截屏：读取到窗口列表", !v.snapshot.windows.isEmpty, "\(v.snapshot.windows.count)")
+        let overlays = NSApp.windows.compactMap { $0 as? OverlayWindow }.filter(\.isVisible)
+        let views = overlays.compactMap { $0.contentView as? OverlayView }
+        check("真实截屏：每块显示器一个遮罩（\(NSScreen.screens.count) 块）", overlays.count == NSScreen.screens.count)
+        check("真实截屏：每块显示器按各自像素尺寸截取", views.allSatisfy {
+            $0.snapshot.image.width == Int(($0.snapshot.screen.frame.width * $0.snapshot.screen.backingScaleFactor).rounded())
+                && $0.window?.frame == $0.snapshot.screen.frame
+        }, views.map { "\($0.snapshot.screen.localizedName): \($0.snapshot.image.width)×\($0.snapshot.image.height)" }.joined(separator: ", "))
+        if NSScreen.screens.count > 1, let other = views.first(where: { $0 !== v }) {
+            // Selecting on another display clears this one (only one selection at a time).
+            click(v, CGPoint(x: 50, y: 50))
+            drag(other, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 300, y: 250))
+            check("多显示器：在另一块屏幕框选时，原屏幕选区清除", v.selection == nil && other.selection == CGRect(x: 100, y: 100, width: 200, height: 150),
+                  "\(String(describing: v.selection)) / \(String(describing: other.selection))")
+            key(other, 53)
+            _ = await waitUntil { overlay() == nil }
+            guard let again = await startSession(.screenshot) else { helper?.terminate(); return }
+            v = again
+        }
         let local = CGRect(x: helperFrame.minX - screen.frame.minX, y: screen.frame.maxY - helperFrame.maxY,
                            width: helperFrame.width, height: helperFrame.height)
         click(v, CGPoint(x: local.midX, y: local.midY))

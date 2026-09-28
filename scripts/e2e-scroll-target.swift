@@ -48,6 +48,8 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
 window.level = .floating
+// Stay visible even if the user switches Spaces or a full-screen app during the run.
+window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
 let scroll = NSScrollView(frame: CGRect(origin: .zero, size: frame.size))
 scroll.hasVerticalScroller = false
 let doc = FlippedImageView(frame: CGRect(x: 0, y: 0, width: frame.width, height: pageHeight))

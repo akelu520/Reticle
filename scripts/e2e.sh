@@ -15,7 +15,8 @@ swiftc -O scripts/e2e-scroll-target.swift -o "$OUT/e2e-scroll-target"
 # A static demo screen for the deterministic sections.
 cat > "$OUT/make-demo.swift" <<'SWIFT'
 import AppKit
-let size = NSScreen.main!.frame.size, scale = NSScreen.main!.backingScaleFactor
+// The primary display, same as the app's demo mode.
+let size = NSScreen.screens[0].frame.size, scale = NSScreen.screens[0].backingScaleFactor
 let w = Int(size.width * scale), h = Int(size.height * scale)
 let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
                            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!

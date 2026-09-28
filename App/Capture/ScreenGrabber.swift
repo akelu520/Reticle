@@ -79,11 +79,12 @@ enum ScreenGrabber {
 
     #if DEBUG
     /// `RETICLE_DEMO_IMAGE=/path.png` replaces the capture with a static image on
-    /// the main screen, so the overlay can be exercised without permissions.
+    /// the primary display (the one with the menu bar), so the overlay can be exercised
+    /// without permissions. Not `NSScreen.main`: that follows focus between displays.
     @MainActor
     private static func demoSnapshots() -> [ScreenSnapshot]? {
         guard let path = ProcessInfo.processInfo.environment["RETICLE_DEMO_IMAGE"],
-              let screen = NSScreen.main,
+              let screen = NSScreen.screens.first,
               let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
         let s = screen.frame.size

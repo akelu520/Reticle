@@ -108,7 +108,8 @@ final class CaptureSession {
     /// 固定到屏幕: float the result where the selection was, then end the session.
     func pin(from view: OverlayView) {
         guard let image = view.exportImage(), let frame = view.selectionGlobalFrame else { return }
-        PinManager.shared.pin(image, frame: frame, scale: view.window?.backingScaleFactor ?? 2)
+        // The image's own pixels-per-point, so the pin is exactly the selection's size.
+        PinManager.shared.pin(image, frame: frame, scale: view.snapshot.scale)
         ScreenshotHistory.shared.record(image)
         end(restoreFocus: true)
     }

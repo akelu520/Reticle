@@ -18,8 +18,7 @@ final class StatusBarController: NSObject {
         self.onRecord = onRecord
         self.onSettings = onSettings
         super.init()
-        item.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Reticle")
-        item.button?.image?.isTemplate = true
+        item.button?.image = StatusIcon.make()
 
         let menu = NSMenu()
         captureItem.target = self
