@@ -9,11 +9,48 @@ public enum TextMetrics {
         CTFontCreateUIFontForLanguage(.system, size, nil) ?? CTFontCreateWithName("Helvetica" as CFString, size, nil)
     }
 
-    static func attributed(_ text: String, fontSize: CGFloat, color: RGBA) -> NSAttributedString {
-        NSAttributedString(string: text, attributes: [
+    static func attributed(_ text: String, fontSize: CGFloat, color: RGBA, stroke: RGBA? = nil) -> NSAttributedString {
+        var attrs: [NSAttributedString.Key: Any] = [
             NSAttributedString.Key(kCTFontAttributeName as String): font(size: fontSize),
             NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.cgColor,
-        ])
+        ]
+        if let stroke {
+            // Negative width = fill and stroke (percent of the font size).
+            attrs[NSAttributedString.Key(kCTStrokeWidthAttributeName as String)] = -12.0
+            attrs[NSAttributedString.Key(kCTStrokeColorAttributeName as String)] = stroke.cgColor
+        }
+        return NSAttributedString(string: text, attributes: attrs)
+    }
+
+    /// Padding of the filled box for `.background` text.
+    static func boxPadding(_ fontSize: CGFloat) -> CGSize { CGSize(width: fontSize * 0.3, height: fontSize * 0.15) }
+
+    /// Area a text annotation covers, including its background box or outline.
+    public static func box(of text: String, at origin: CGPoint, style: Style) -> CGRect {
+        let r = CGRect(origin: origin, size: size(of: text, fontSize: style.fontSize))
+        switch style.textStyle {
+        case .plain: return r
+        case .outline: return r.insetBy(dx: -style.fontSize * 0.06, dy: -style.fontSize * 0.06)
+        case .background:
+            let p = boxPadding(style.fontSize)
+            return r.insetBy(dx: -p.width, dy: -p.height)
+        }
+    }
+
+    /// Draws a text annotation in its style: plain, on a filled box, or outlined.
+    static func draw(_ text: String, at origin: CGPoint, style s: Style, in ctx: CGContext) {
+        switch s.textStyle {
+        case .plain:
+            draw(text, at: origin, fontSize: s.fontSize, color: s.color, in: ctx)
+        case .background:
+            let box = box(of: text, at: origin, style: s)
+            ctx.setFillColor(s.color.cgColor)
+            ctx.addPath(CGPath(roundedRect: box, cornerWidth: s.fontSize * 0.2, cornerHeight: s.fontSize * 0.2, transform: nil))
+            ctx.fillPath()
+            draw(text, at: origin, fontSize: s.fontSize, color: s.color.isLight ? .black : .white, in: ctx)
+        case .outline:
+            draw(text, at: origin, fontSize: s.fontSize, color: s.color, stroke: s.color.isLight ? .black : .white, in: ctx)
+        }
     }
 
     /// Size of `text` laid out without wrapping. Empty text measures as one line.
@@ -27,10 +64,10 @@ public enum TextMetrics {
     }
 
     /// Draws `text` with its top-left at `origin` in a y-down context.
-    static func draw(_ text: String, at origin: CGPoint, fontSize: CGFloat, color: RGBA, in ctx: CGContext) {
+    static func draw(_ text: String, at origin: CGPoint, fontSize: CGFloat, color: RGBA, stroke: RGBA? = nil, in ctx: CGContext) {
         guard !text.isEmpty else { return }
         let size = size(of: text, fontSize: fontSize)
-        let setter = CTFramesetterCreateWithAttributedString(attributed(text, fontSize: fontSize, color: color))
+        let setter = CTFramesetterCreateWithAttributedString(attributed(text, fontSize: fontSize, color: color, stroke: stroke))
         let frame = CTFramesetterCreateFrame(setter, CFRange(), CGPath(rect: CGRect(origin: .zero, size: size), transform: nil), nil)
         ctx.saveGState()
         ctx.textMatrix = .identity

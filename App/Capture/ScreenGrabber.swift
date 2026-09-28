@@ -14,7 +14,19 @@ struct ScreenSnapshot {
 }
 
 enum ScreenGrabber {
-    enum Failure: Error { case noDisplays }
+    enum Failure: LocalizedError {
+        case noDisplays
+        /// Screens exist but none matched a display ScreenCaptureKit shares.
+        case displaysUnavailable(screens: [CGDirectDisplayID], shared: [CGDirectDisplayID])
+
+        var errorDescription: String? {
+            switch self {
+            case .noDisplays: "没有可截取的显示器"
+            case let .displaysUnavailable(screens, shared):
+                "无法获取显示器画面（屏幕 \(screens)，可共享 \(shared)）。请确认已授予屏幕录制权限。"
+            }
+        }
+    }
 
     /// Captures every display in parallel, excluding Reticle's own windows.
     @MainActor
@@ -38,6 +50,10 @@ enum ScreenGrabber {
             config.showsCursor = false
             config.captureResolution = .best
             jobs.append((screen, filter, config))
+        }
+
+        if jobs.isEmpty {
+            throw Failure.displaysUnavailable(screens: screens.compactMap(\.displayID), shared: content.displays.map(\.displayID))
         }
 
         let images = try await withThrowingTaskGroup(of: (Int, CGImage).self) { group in

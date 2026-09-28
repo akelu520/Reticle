@@ -33,13 +33,21 @@ SWIFT
 swift "$OUT/make-demo.swift" "$OUT/demo.png"
 
 set +e
-RETICLE_E2E=1 \
-RETICLE_DEMO_IMAGE="$PWD/$OUT/demo.png" \
-RETICLE_E2E_SAVE_DIR="$PWD/$OUT/saves" \
-RETICLE_E2E_HELPER="$PWD/$OUT/e2e-scroll-target" \
-RETICLE_HISTORY_DIR="$PWD/$OUT/history" \
-  build/dd/Build/Products/Debug/Reticle.app/Contents/MacOS/Reticle 2>/dev/null
-status=$?
+# Launch through LaunchServices so Reticle, not the terminal, is the process
+# that screen-recording permission is checked against.
+LOG="$OUT/run.log"
+: > "$LOG"
+open -n -W --stdout "$LOG" --stderr /dev/null \
+  --env RETICLE_E2E=1 \
+  --env RETICLE_DEMO_IMAGE="$PWD/$OUT/demo.png" \
+  --env RETICLE_E2E_SAVE_DIR="$PWD/$OUT/saves" \
+  --env RETICLE_E2E_HELPER="$PWD/$OUT/e2e-scroll-target" \
+  --env RETICLE_HISTORY_DIR="$PWD/$OUT/history" \
+  ${RETICLE_E2E_ONLY:+--env RETICLE_E2E_ONLY="$RETICLE_E2E_ONLY"} \
+  build/dd/Build/Products/Debug/Reticle.app
+cat "$LOG"
+# `open -W` does not pass the exit status through; the summary line does.
+if grep -qE '^== 结果：([0-9]+)/\1 通过' "$LOG"; then status=0; else status=1; fi
 if [ -f "$OUT/saves/real-scroll.png" ]; then
   swift scripts/e2e-verify-scroll.swift "$OUT/saves/real-scroll.png" 40 || status=$((status + 1))
 fi

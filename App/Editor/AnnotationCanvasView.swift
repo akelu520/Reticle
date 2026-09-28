@@ -13,7 +13,7 @@ final class AnnotationCanvasView: NSView {
     }
 
     var content = Content(annotations: [], watermark: nil, selectedBounds: nil) { didSet { needsDisplay = true } }
-    var pixelated: CGImage? { didSet { needsDisplay = true } }
+    var effects: EffectSources? { didSet { needsDisplay = true } }
     private let baseSize: CGSize
     private let scale: CGFloat
 
@@ -37,7 +37,7 @@ final class AnnotationCanvasView: NSView {
         // View origin is the selection's top-left; move into screen-local points, then pixels.
         ctx.translateBy(x: -frame.minX, y: -frame.minY)
         ctx.scaleBy(x: 1 / scale, y: 1 / scale)
-        AnnotationRenderer.draw(content.annotations, pixelated: pixelated, baseSize: baseSize, in: ctx)
+        AnnotationRenderer.draw(content.annotations, effects: effects, baseSize: baseSize, in: ctx)
         if let w = content.watermark {
             AnnotationRenderer.drawWatermark(w, in: CoordinateSpace.pixelRect(fromPoints: frame, scale: scale), ctx: ctx)
         }

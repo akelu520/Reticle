@@ -105,6 +105,8 @@ final class DragHandle: NSView {
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
 
+    // Toolbar clicks work even while the overlay is not the key window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
         last = event.locationInWindow
         NSCursor.closedHand.set()
@@ -208,6 +210,38 @@ enum Icons {
                 p.line(to: CGPoint(x: r.maxX - r.width * 0.2, y: r.maxY - r.height * 0.2))
                 p.move(to: CGPoint(x: r.midX, y: r.maxY - r.height * 0.2))
                 p.line(to: CGPoint(x: r.midX, y: r.minY + r.height * 0.18))
+                p.stroke()
+            }
+        case "reticle.textBox":
+            draw = { r in
+                // "T" knocked out of a filled rounded square (text on a box).
+                let box = r.insetBy(dx: r.width * 0.14, dy: r.height * 0.14)
+                NSBezierPath(roundedRect: box, xRadius: 2.5, yRadius: 2.5).fill()
+                NSGraphicsContext.current?.compositingOperation = .destinationOut
+                let t = NSBezierPath()
+                t.lineWidth = 1.8
+                t.move(to: CGPoint(x: box.minX + box.width * 0.24, y: box.maxY - box.height * 0.25))
+                t.line(to: CGPoint(x: box.maxX - box.width * 0.24, y: box.maxY - box.height * 0.25))
+                t.move(to: CGPoint(x: box.midX, y: box.maxY - box.height * 0.25))
+                t.line(to: CGPoint(x: box.midX, y: box.minY + box.height * 0.2))
+                t.stroke()
+                NSGraphicsContext.current?.compositingOperation = .sourceOver
+            }
+        case "reticle.textOutline":
+            draw = { r in
+                // Hollow "T" (outlined text).
+                let top = r.maxY - r.height * 0.18, bar = r.height * 0.16, stem = r.width * 0.18
+                let p = NSBezierPath()
+                p.move(to: CGPoint(x: r.minX + r.width * 0.16, y: top))
+                p.line(to: CGPoint(x: r.maxX - r.width * 0.16, y: top))
+                p.line(to: CGPoint(x: r.maxX - r.width * 0.16, y: top - bar))
+                p.line(to: CGPoint(x: r.midX + stem / 2, y: top - bar))
+                p.line(to: CGPoint(x: r.midX + stem / 2, y: r.minY + r.height * 0.14))
+                p.line(to: CGPoint(x: r.midX - stem / 2, y: r.minY + r.height * 0.14))
+                p.line(to: CGPoint(x: r.midX - stem / 2, y: top - bar))
+                p.line(to: CGPoint(x: r.minX + r.width * 0.16, y: top - bar))
+                p.close()
+                p.lineWidth = 1.2
                 p.stroke()
             }
         case "reticle.watermark":
@@ -435,6 +469,8 @@ final class ColorSwatch: NSView {
         }
     }
 
+    // Toolbar clicks work even while the overlay is not the key window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { handler() }
 }
 
@@ -461,5 +497,7 @@ final class SizeDot: NSView {
         NSBezierPath(ovalIn: r).fill()
     }
 
+    // Toolbar clicks work even while the overlay is not the key window.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { handler() }
 }

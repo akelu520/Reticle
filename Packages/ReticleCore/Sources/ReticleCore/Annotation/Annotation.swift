@@ -16,7 +16,7 @@ public enum AnnotationKind: String, Codable, CaseIterable, Sendable {
 
     var isStroke: Bool {
         switch self {
-        case .pen, .highlight, .mosaicBrush: return true
+        case .pen, .mosaicBrush: return true
         default: return false
         }
     }
@@ -24,12 +24,28 @@ public enum AnnotationKind: String, Codable, CaseIterable, Sendable {
     var isTextual: Bool { self == .text || self == .label }
 }
 
+/// 文本 styles: plain colored text, text on a filled box, or text with a contrasting outline.
+public enum TextStyle: String, Codable, CaseIterable, Sendable { case plain, background, outline }
+
+/// 马赛克 effect: pixel blocks or a blur.
+public enum MosaicEffect: String, Codable, CaseIterable, Sendable { case mosaic, blur }
+
+/// 高亮 spotlight shape.
+public enum HighlightShape: String, Codable, CaseIterable, Sendable { case rect, ellipse, roundedRect }
+
 public struct Style: Codable, Equatable, Hashable, Sendable {
     public var color: RGBA
     /// Stroke width in image pixels.
     public var lineWidth: CGFloat
     /// Font size in image pixels.
     public var fontSize: CGFloat
+    public var textStyle: TextStyle = .plain
+    public var effect: MosaicEffect = .mosaic
+    /// Mosaic block size / blur radius, 0…1 (模糊强度).
+    public var strength: CGFloat = 0.5
+    public var shape: HighlightShape = .roundedRect
+    /// How dark the spotlight makes everything around a highlight, 0…1 (不透明度).
+    public var opacity: CGFloat = 0.5
 
     public init(color: RGBA, lineWidth: CGFloat, fontSize: CGFloat) {
         self.color = color
@@ -75,7 +91,9 @@ public struct Annotation: Identifiable, Codable, Equatable, Sendable {
         switch kind {
         case .text:
             guard let o = points.first else { return .null }
-            return CGRect(origin: o, size: TextMetrics.size(of: text, fontSize: style.fontSize))
+            return TextMetrics.box(of: text, at: o, style: style)
+        case .highlight:
+            return spanRect
         case .label:
             return LabelLayout(annotation: self).bounds
         case .arrow:
@@ -90,12 +108,12 @@ public struct Annotation: Identifiable, Codable, Equatable, Sendable {
     /// Whether `p` touches this mark, with `tolerance` pixels of slack.
     public func hitTest(_ p: CGPoint, tolerance: CGFloat) -> Bool {
         switch kind {
-        case .text, .label, .mosaicBox:
+        case .text, .label, .mosaicBox, .highlight:
             return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(p)
         case .arrow:
             let path = ShapePaths.arrow(from: points.first ?? .zero, to: points.last ?? .zero, width: style.lineWidth)
             return path.contains(p) || path.copy(strokingWithWidth: tolerance * 2, lineCap: .round, lineJoin: .round, miterLimit: 1).contains(p)
-        case .rect, .ellipse, .line, .pen, .highlight, .mosaicBrush:
+        case .rect, .ellipse, .line, .pen, .mosaicBrush:
             let path = kind == .rect ? ShapePaths.roundedRect(spanRect, lineWidth: style.lineWidth)
                 : kind == .ellipse ? CGPath(ellipseIn: spanRect, transform: nil)
                 : kind == .line ? ShapePaths.stroke([points.first ?? .zero, points.last ?? .zero])
@@ -119,6 +137,14 @@ public struct Watermark: Codable, Equatable, Sendable {
         self.opacity = opacity
         self.color = color
         self.fontSize = fontSize
+    }
+
+    public static let maxLength = 16
+    public static let defaultOpacity: CGFloat = 0.3
+
+    /// 最多输入 16 个字符.
+    public static func limited(_ text: String) -> String {
+        String(text.prefix(maxLength))
     }
 }
 

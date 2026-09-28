@@ -13,6 +13,8 @@ enum EndToEndTests {
     private static var notes: [String] = []
 
     static func run() async -> Int {
+        // Line-buffered so progress is visible while the suite runs.
+        setvbuf(stdout, nil, _IOLBF, 0)
         let backup = PasteboardBackup()
         let memoryAtStart = footprintMB()
         let sections: [(String, () async -> Void)] = [
@@ -121,10 +123,11 @@ enum EndToEndTests {
             drag(v, from: p(0.05, y), to: p(0.25, y + 0.06))
             check("\(tip)：拖拽绘制", annotations().last?.kind == kind && annotations().count == i + 1, "\(annotations().map(\.kind))")
         }
-        check("二级工具栏：粗细 + 7 色", descendants(of: v, SizeDot.self).filter { !$0.isHiddenOrHasHiddenAncestor }.count == 3
-              && descendants(of: v, ColorSwatch.self).filter { !$0.isHiddenOrHasHiddenAncestor }.count == 7)
 
         press(v, tip: "矩形")
+        v.layoutSubtreeIfNeeded()
+        check("二级工具栏：粗细 + 7 色", descendants(of: v, SizeDot.self).filter { !$0.isHiddenOrHasHiddenAncestor }.count == 3
+              && descendants(of: v, ColorSwatch.self).filter { !$0.isHiddenOrHasHiddenAncestor }.count == 7)
         drag(v, from: p(0.3, 0.1), to: p(0.4, 0.14), flags: .shift)
         let square = annotations().last?.spanRect ?? .zero
         check("⇧ 画正方形", abs(square.width - square.height) < 0.5, "\(square)")
@@ -139,15 +142,40 @@ enum EndToEndTests {
         check("选颜色和粗细后绘制", annotations().last?.style.color == .blue && annotations().last?.style.lineWidth == 8 * scale,
               "\(String(describing: annotations().last?.style))")
 
+        func sub() -> SubToolbar? { descendants(of: v, SubToolbar.self).first { !$0.isHiddenOrHasHiddenAncestor } }
         press(v, tip: "马赛克")
-        press(v, tip: "框选马赛克")
+        if let sub = sub() { press(sub, tip: "框选") }
         drag(v, from: p(0.5, 0.05), to: p(0.7, 0.2))
-        check("框选马赛克", annotations().last?.kind == .mosaicBox)
-        press(v, tip: "画笔马赛克")
+        check("框选马赛克", annotations().last?.kind == .mosaicBox && annotations().last?.style.effect == .mosaic)
+        if let sub = sub() { press(sub, tip: "画笔") }
         drag(v, from: p(0.5, 0.25), to: p(0.7, 0.3))
         check("画笔马赛克", annotations().last?.kind == .mosaicBrush)
+        if let sub = sub() {
+            press(sub, tip: "模糊")
+            descendants(of: sub, PercentSlider.self).first?.set(0.8)
+        }
+        check("马赛克二级工具栏：马赛克/模糊、画笔/框选、模糊强度", sub().map { s in ["马赛克", "模糊", "画笔", "框选"].allSatisfy { visibleButton(in: s, tip: $0) != nil } } == true
+              && sub().map { descendants(of: $0, NSTextField.self).contains { $0.stringValue == "模糊强度" } } == true)
+        if let sub = sub() { press(sub, tip: "框选") }
+        drag(v, from: p(0.75, 0.05), to: p(0.95, 0.2))
+        check("模糊 + 强度 80%", annotations().last?.style.effect == .blur && abs((annotations().last?.style.strength ?? 0) - 0.8) < 0.001)
+
+        press(v, tip: "高亮")
+        if let sub = sub() {
+            press(sub, tip: "椭圆")
+            descendants(of: sub, PercentSlider.self).first?.set(0.3)
+        }
+        drag(v, from: p(0.3, 0.35), to: p(0.45, 0.45))
+        check("高亮：椭圆聚光 + 不透明度 30%", annotations().last?.kind == .highlight && annotations().last?.style.shape == .ellipse
+              && abs((annotations().last?.style.opacity ?? 0) - 0.3) < 0.001)
 
         press(v, tip: "文本")
+        if let sub = sub() {
+            check("文本二级工具栏：普通/底色/描边 + 字号", ["普通", "底色", "描边"].allSatisfy { visibleButton(in: sub, tip: $0) != nil }
+                  && descendants(of: sub, MenuButton.self).first?.title.hasPrefix("12pt") == true)
+            press(sub, tip: "底色")
+            (descendants(of: sub, MenuButton.self).first?.menuForTesting()?.items.first { $0.title == "20pt" } as? MenuActionItem)?.fire()
+        }
         let textAt = p(0.5, 0.45)
         click(v, textAt)
         let input = v.window?.firstResponder as? NSTextView
@@ -156,6 +184,8 @@ enum EndToEndTests {
         input?.insertText("中文", replacementRange: NSRange(location: NSNotFound, length: 0)) // stands in for an IME commit
         key(v, 53) // Esc ends editing
         check("文本：输入英文和中文", annotations().last?.kind == .text && annotations().last?.text == "Hello中文", annotations().last?.text ?? "nil")
+        check("文本：底色样式 + 20pt", annotations().last?.style.textStyle == .background && annotations().last?.style.fontSize == 20 * scale,
+              "\(String(describing: annotations().last?.style))")
         check("文本：Esc 结束输入后截图仍在", overlay() != nil)
 
         press(v, tip: "标签")
@@ -195,12 +225,12 @@ enum EndToEndTests {
         check("Delete 删除选中标注", annotations().count == count - 1 && !annotations().contains { $0.id == rect.id })
 
         press(v, tip: "水印")
-        if let field = descendants(of: v, WatermarkPanel.self).first.flatMap({ descendants(of: $0, NSTextField.self).first { $0.isEditable } }) {
-            field.stringValue = "机密"
-            NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: field)
-        }
-        press(v, title: "确定")
-        check("水印：输入文字后确定", editor.model.document.watermark?.text == "机密")
+        let panel = descendants(of: v, WatermarkPanel.self).first { !$0.isHiddenOrHasHiddenAncestor }
+        check("水印二级工具栏：输入框/不透明度/颜色", panel.map { p in descendants(of: p, NSTextField.self).contains { $0.placeholderString == "最多输入 16 个字符" }
+            && descendants(of: p, NSTextField.self).contains { $0.stringValue == "30 %" } && descendants(of: p, ColorSwatch.self).count == 7 } == true)
+        panel?.setTextForTesting("机密文件请勿外传机密文件请勿外传超出部分")
+        press(v, tip: "水印") // closing the options applies them
+        check("水印：最多 16 个字符", editor.model.document.watermark?.text == "机密文件请勿外传机密文件请勿外传", editor.model.document.watermark?.text ?? "nil")
 
         let selNow = v.selection ?? .zero
         let expectedPx = CoordinateSpace.pixelRect(fromPoints: selNow, scale: scale)
@@ -509,6 +539,12 @@ enum EndToEndTests {
             notes.append("没有屏幕录制权限，跳过真实屏幕测试")
             return
         }
+        // ScreenCaptureKit shares no displays while the session is locked or the display sleeps.
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
+        if (session["CGSSessionScreenIsLocked"] as? Bool) == true || CGDisplayIsAsleep(CGMainDisplayID()) != 0 {
+            notes.append("屏幕已锁定或显示器休眠，跳过真实屏幕测试（解锁后重跑）")
+            return
+        }
         let demo = ProcessInfo.processInfo.environment["RETICLE_DEMO_IMAGE"]
         unsetenv("RETICLE_DEMO_IMAGE")
         defer { if let demo { setenv("RETICLE_DEMO_IMAGE", demo, 1) } }
@@ -690,6 +726,8 @@ enum EndToEndTests {
     }
 
     private static func clickView(_ view: NSView) {
+        // Freshly rebuilt controls may not be laid out yet.
+        view.window?.contentView?.layoutSubtreeIfNeeded()
         click(view, CGPoint(x: view.bounds.midX, y: view.bounds.midY))
     }
 

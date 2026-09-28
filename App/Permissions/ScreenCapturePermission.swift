@@ -19,7 +19,6 @@ enum ScreenCapturePermission {
             CGRequestScreenCaptureAccess() // shows the system prompt once
             return false
         }
-        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "需要“屏幕录制”权限"
         alert.informativeText = """
@@ -30,7 +29,7 @@ enum ScreenCapturePermission {
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "重置权限")
         alert.addButton(withTitle: "稍后")
-        switch alert.runModal() {
+        switch alert.runVisibly() {
         case .alertFirstButtonReturn:
             openSettings()
         case .alertSecondButtonReturn:

@@ -6,15 +6,40 @@ import Foundation
 /// the exporter both call into here, so what you see is what you get.
 public enum AnnotationRenderer {
     /// - Parameters:
-    ///   - pixelated: mosaic source covering the whole base image, or nil to fall back to gray.
+    ///   - effects: mosaic / blur sources, or nil to fall back to gray.
     ///   - baseSize: size of the base image in pixels.
-    public static func draw(_ annotations: [Annotation], pixelated: CGImage?, baseSize: CGSize, in ctx: CGContext) {
-        for a in Document.paintOrder(annotations) {
-            draw(a, pixelated: pixelated, baseSize: baseSize, in: ctx)
+    public static func draw(_ annotations: [Annotation], effects: EffectSources?, baseSize: CGSize, in ctx: CGContext) {
+        let ordered = Document.paintOrder(annotations)
+        for a in ordered where a.kind.layer == 0 { draw(a, effects: effects, baseSize: baseSize, in: ctx) }
+        drawSpotlight(ordered.filter { $0.kind == .highlight }, baseSize: baseSize, in: ctx)
+        for a in ordered where a.kind.layer > 1 { draw(a, effects: effects, baseSize: baseSize, in: ctx) }
+    }
+
+    /// 高亮: dim everything except the highlighted shapes (one shared dim, the latest opacity).
+    static func drawSpotlight(_ highlights: [Annotation], baseSize: CGSize, in ctx: CGContext) {
+        guard let last = highlights.last else { return }
+        let path = CGMutablePath()
+        path.addRect(CGRect(origin: .zero, size: baseSize))
+        for h in highlights { path.addPath(highlightPath(h)) }
+        ctx.saveGState()
+        ctx.setFillColor(CGColor(gray: 0, alpha: min(max(last.style.opacity, 0), 1)))
+        ctx.addPath(path)
+        ctx.fillPath(using: .evenOdd)
+        ctx.restoreGState()
+    }
+
+    public static func highlightPath(_ h: Annotation) -> CGPath {
+        let r = h.spanRect
+        switch h.style.shape {
+        case .rect: return CGPath(rect: r, transform: nil)
+        case .ellipse: return CGPath(ellipseIn: r, transform: nil)
+        case .roundedRect:
+            let radius = min(12 * max(h.style.lineWidth / 3, 1), r.width / 2, r.height / 2)
+            return CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil)
         }
     }
 
-    static func draw(_ a: Annotation, pixelated: CGImage?, baseSize: CGSize, in ctx: CGContext) {
+    static func draw(_ a: Annotation, effects: EffectSources?, baseSize: CGSize, in ctx: CGContext) {
         ctx.saveGState()
         defer { ctx.restoreGState() }
         let s = a.style
@@ -47,10 +72,7 @@ public enum AnnotationRenderer {
             ctx.addPath(ShapePaths.stroke(a.points))
             ctx.strokePath()
         case .highlight:
-            ctx.setStrokeColor(s.color.withAlpha(0.4).cgColor)
-            ctx.setLineWidth(s.lineWidth)
-            ctx.addPath(ShapePaths.stroke(a.points))
-            ctx.strokePath()
+            break // drawn together by drawSpotlight
         case .mosaicBrush, .mosaicBox:
             if a.kind == .mosaicBox {
                 ctx.clip(to: a.spanRect)
@@ -61,14 +83,14 @@ public enum AnnotationRenderer {
                 ctx.clip()
             }
             let full = CGRect(origin: .zero, size: baseSize)
-            if let pixelated {
-                drawImage(pixelated, in: full, ctx: ctx)
+            if let source = effects?.image(for: s) {
+                drawImage(source, in: full, ctx: ctx)
             } else {
                 ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
                 ctx.fill(full)
             }
         case .text:
-            TextMetrics.draw(a.text, at: a.points.first ?? .zero, fontSize: s.fontSize, color: s.color, in: ctx)
+            TextMetrics.draw(a.text, at: a.points.first ?? .zero, style: s, in: ctx)
         case .label:
             drawLabel(a, in: ctx)
         }

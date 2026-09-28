@@ -20,7 +20,8 @@ final class AnnotationEditor {
     private let baseImage: CGImage
     private unowned let host: NSView
     private(set) var model: EditorModel
-    private var pixelated: CGImage?
+    /// Mosaic / blur sources, built on first use.
+    private lazy var effects = EffectSources(base: baseImage, scale: scale)
     private var textInput: TextInputView?
     /// Watermark edits are previewed on the canvas while the panel is open, then recorded as one undo step.
     private(set) var watermarkPanelOpen = false
@@ -31,7 +32,13 @@ final class AnnotationEditor {
     private(set) lazy var subToolbar = SubToolbar(actions: .init(
         setSize: { [weak self] in self?.model.setSize($0); self?.refresh() },
         setColor: { [weak self] in self?.model.setColor($0); self?.refresh() },
-        setMosaicMode: { [weak self] in self?.model.mosaicMode = $0; self?.refresh() }))
+        setMosaicMode: { [weak self] in self?.model.mosaicMode = $0; self?.refresh() },
+        setFontSize: { [weak self] in self?.model.setFontSize($0); self?.refresh() },
+        setTextStyle: { [weak self] in self?.model.setTextStyle($0); self?.refresh() },
+        setEffect: { [weak self] in self?.model.setMosaicEffect($0); self?.refresh() },
+        setStrength: { [weak self] in self?.model.setStrength($0); self?.refresh() },
+        setShape: { [weak self] in self?.model.setHighlightShape($0); self?.refresh() },
+        setOpacity: { [weak self] in self?.model.setOpacity($0); self?.refresh() }))
     private(set) lazy var watermarkPanel = WatermarkPanel(
         onChange: { [weak self] in self?.previewWatermark($0) },
         onDone: { [weak self] in self?.closeWatermarkPanel() })
@@ -59,7 +66,7 @@ final class AnnotationEditor {
     /// The base image cropped to `pixelRect` with annotations burned in.
     func render(crop pixelRect: CGRect) -> CGImage? {
         commitTextInput()
-        return Compositor.render(base: baseImage, pixelated: pixelated, document: model.document, crop: pixelRect)
+        return Compositor.render(base: baseImage, effects: effects, document: model.document, crop: pixelRect)
     }
 
     // MARK: - Commands
@@ -68,9 +75,8 @@ final class AnnotationEditor {
         commitTextInput()
         closeWatermarkPanel()
         model.tool = model.tool == tool ? nil : tool
-        if model.tool == .mosaic, pixelated == nil {
-            pixelated = Mosaic.pixelate(baseImage, blockSize: 12 * scale)
-            canvas.pixelated = pixelated
+        if model.tool == .mosaic, canvas.effects == nil {
+            canvas.effects = effects
         }
         refresh()
         host.window?.makeFirstResponder(host)
@@ -155,9 +161,10 @@ final class AnnotationEditor {
         guard let style = model.pendingTextStyle else { return }
         let isLabel = kind == .label
         // Labels: white text over the slate bubble drawn by the canvas; text: the chosen color.
+        let boxed = !isLabel && style.textStyle == .background
         let input = TextInputView(fontSize: style.fontSize / scale,
-                                  color: isLabel ? .white : style.color.nsColor,
-                                  bubble: nil)
+                                  color: isLabel ? .white : boxed ? (style.color.isLight ? .black : .white) : style.color.nsColor,
+                                  bubble: boxed ? style.color.nsColor : nil)
         if isLabel { input.layer?.borderWidth = 0 }
         input.string = text
         let scale = self.scale
@@ -211,8 +218,9 @@ final class AnnotationEditor {
     }
 
     private func previewWatermark(_ v: WatermarkPanel.Value) {
-        canvas.content.watermark = v.text.isEmpty ? nil
-            : Watermark(text: v.text, opacity: v.opacity, color: v.color, fontSize: 18 * scale)
+        let text = Watermark.limited(v.text)
+        canvas.content.watermark = text.isEmpty ? nil
+            : Watermark(text: text, opacity: v.opacity, color: v.color, fontSize: 18 * scale)
     }
 
     func closeWatermarkPanel() {
@@ -274,8 +282,7 @@ final class AnnotationEditor {
             _ = model.pointerDown(at: a); model.pointerDragged(to: b); model.pointerUp()
         }
         model.tool = .mosaic
-        pixelated = Mosaic.pixelate(baseImage, blockSize: 12 * s)
-        canvas.pixelated = pixelated
+        canvas.effects = effects
         model.mosaicMode = .box
         _ = model.pointerDown(at: px(0.05, 0.55)); model.pointerDragged(to: px(0.3, 0.95)); model.pointerUp()
         model.tool = .highlight

@@ -34,13 +34,13 @@ final class RenderTests: XCTestCase {
     let style = Style(color: .red, lineWidth: 4, fontSize: 20)
 
     func testNoAnnotationsIsPlainCrop() {
-        let out = Compositor.render(base: makeBase(), pixelated: nil, document: Document(), crop: CGRect(x: 0, y: 0, width: 50, height: 50))
+        let out = Compositor.render(base: makeBase(), effects: nil, document: Document(), crop: CGRect(x: 0, y: 0, width: 50, height: 50))
         XCTAssertEqual(out?.width, 50)
     }
 
     func testRectStrokeLandsAtTopLeftCoordinates() throws {
         let doc = Document(annotations: [Annotation(kind: .rect, points: [CGPoint(x: 60, y: 20), CGPoint(x: 120, y: 80)], style: style)])
-        let out = try XCTUnwrap(Compositor.render(base: makeBase(), pixelated: nil, document: doc, crop: CGRect(x: 50, y: 0, width: 100, height: 100)))
+        let out = try XCTUnwrap(Compositor.render(base: makeBase(), effects: nil, document: doc, crop: CGRect(x: 50, y: 0, width: 100, height: 100)))
         XCTAssertEqual(out.width, 100)
         // Left edge x=60 → crop x=10; top edge y=20.
         let edge = pixel(out, 10, 50)
@@ -54,7 +54,7 @@ final class RenderTests: XCTestCase {
 
     func testArrowFillsNearTip() throws {
         let doc = Document(annotations: [Annotation(kind: .arrow, points: [CGPoint(x: 100, y: 50), CGPoint(x: 190, y: 50)], style: style)])
-        let out = try XCTUnwrap(Compositor.render(base: makeBase(), pixelated: nil, document: doc, crop: CGRect(x: 0, y: 0, width: 200, height: 100)))
+        let out = try XCTUnwrap(Compositor.render(base: makeBase(), effects: nil, document: doc, crop: CGRect(x: 0, y: 0, width: 200, height: 100)))
         XCTAssertLessThan(pixel(out, 180, 50)[1], 120)
         XCTAssertEqual(pixel(out, 180, 30), [255, 255, 255, 255])
     }
@@ -64,7 +64,7 @@ final class RenderTests: XCTestCase {
         let pix = try XCTUnwrap(Mosaic.pixelate(base, blockSize: 20))
         XCTAssertEqual(pix.width, base.width)
         let doc = Document(annotations: [Annotation(kind: .mosaicBox, points: [.zero, CGPoint(x: 40, y: 40)], style: style)])
-        let out = try XCTUnwrap(Compositor.render(base: base, pixelated: pix, document: doc, crop: CGRect(x: 0, y: 0, width: 200, height: 100)))
+        let out = try XCTUnwrap(Compositor.render(base: base, effects: EffectSources(base: base, scale: 1), document: doc, crop: CGRect(x: 0, y: 0, width: 200, height: 100)))
         // Checker averages to mid gray instead of pure black/white.
         let p = pixel(out, 5, 5)
         XCTAssertGreaterThan(p[0], 60)
@@ -78,7 +78,7 @@ final class RenderTests: XCTestCase {
             Annotation(kind: .text, points: [CGPoint(x: 10, y: 50)], style: style, text: "Hi"),
             Annotation(kind: .label, points: [CGPoint(x: 120, y: 70)], style: style, text: "A"),
         ])
-        let out = try XCTUnwrap(Compositor.render(base: makeBase(), pixelated: nil, document: doc, crop: CGRect(x: 0, y: 0, width: 200, height: 100)))
+        let out = try XCTUnwrap(Compositor.render(base: makeBase(), effects: nil, document: doc, crop: CGRect(x: 0, y: 0, width: 200, height: 100)))
         let textArea = (10..<40).flatMap { x in (50..<75).map { y in pixel(out, x, y) } }
         XCTAssertTrue(textArea.contains { $0[1] < 150 }, "red glyph pixels in the text box")
         XCTAssertLessThan(pixel(out, 120, 70)[1], 150, "anchor dot")
@@ -87,7 +87,7 @@ final class RenderTests: XCTestCase {
     func testWatermarkTintsImageAndRespectsCrop() throws {
         let doc = Document(watermark: Watermark(text: "WATERMARK", opacity: 1, color: .black, fontSize: 14))
         let crop = CGRect(x: 100, y: 0, width: 100, height: 100)
-        let out = try XCTUnwrap(Compositor.render(base: makeBase(), pixelated: nil, document: doc, crop: crop))
+        let out = try XCTUnwrap(Compositor.render(base: makeBase(), effects: nil, document: doc, crop: crop))
         let all = (0..<100).flatMap { x in stride(from: 0, to: 100, by: 2).map { y in pixel(out, x, y)[0] } }
         XCTAssertTrue(all.contains { $0 < 128 })
     }
@@ -120,7 +120,7 @@ final class ReferenceStyleTests: XCTestCase {
         ctx.setFillColor(CGColor(gray: 1, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let base = ctx.makeImage()!
-        return Compositor.render(base: base, pixelated: nil, document: Document(annotations: annotations), crop: CGRect(x: 0, y: 0, width: width, height: height))!
+        return Compositor.render(base: base, effects: nil, document: Document(annotations: annotations), crop: CGRect(x: 0, y: 0, width: width, height: height))!
     }
 
     func pixel(_ image: CGImage, _ x: Int, _ y: Int) -> [UInt8] {

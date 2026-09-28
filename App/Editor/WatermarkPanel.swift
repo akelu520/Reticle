@@ -1,7 +1,8 @@
 import AppKit
 import ReticleCore
 
-/// 水印：input text, opacity and color. Changes preview live; 移除 clears it.
+/// 水印 options in sub-toolbar form: text (最多输入 16 个字符) ｜ 不透明度 ｜ 颜色.
+/// Changes preview live; Return or clicking elsewhere applies them.
 final class WatermarkPanel: FloatingPanelView, NSTextFieldDelegate {
     struct Value {
         var text: String
@@ -10,34 +11,44 @@ final class WatermarkPanel: FloatingPanelView, NSTextFieldDelegate {
     }
 
     private let field = NSTextField()
-    private let slider = NSSlider(value: 30, minValue: 10, maxValue: 100, target: nil, action: nil)
-    private let percent = NSTextField(labelWithString: "30%")
+    private let percent = NSTextField(labelWithString: "30 %")
+    private var slider: PercentSlider!
     private var swatches: [ColorSwatch] = []
-    private var color: RGBA = .black
+    private var color: RGBA = .red
+    private var opacity = Watermark.defaultOpacity
     private let onChange: (Value) -> Void
     private let onDone: () -> Void
 
     init(onChange: @escaping (Value) -> Void, onDone: @escaping () -> Void) {
         self.onChange = onChange
         self.onDone = onDone
-        super.init(spacing: 6)
+        super.init(spacing: 8, insets: NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12))
 
-        field.placeholderString = "输入水印内容"
+        field.placeholderString = "最多输入 \(Watermark.maxLength) 个字符"
         field.delegate = self
+        field.bezelStyle = .roundedBezel
+        field.font = .systemFont(ofSize: 13)
         field.translatesAutoresizingMaskIntoConstraints = false
-        field.widthAnchor.constraint(equalToConstant: 140).isActive = true
+        field.widthAnchor.constraint(equalToConstant: 170).isActive = true
         stack.addArrangedSubview(field)
         addSeparator()
 
-        stack.addArrangedSubview(NSTextField(labelWithString: "透明度"))
-        slider.target = self
-        slider.action = #selector(sliderChanged)
+        let title = NSTextField(labelWithString: "不透明度")
+        title.font = .systemFont(ofSize: 13)
+        title.textColor = Palette.icon
+        stack.addArrangedSubview(title)
+        percent.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        percent.textColor = Palette.icon
+        percent.alignment = .right
+        slider = PercentSlider(value: opacity, percent: percent) { [weak self] v in
+            self?.opacity = max(v, 0.05)
+            self?.notify()
+        }
         slider.translatesAutoresizingMaskIntoConstraints = false
-        slider.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        slider.widthAnchor.constraint(equalToConstant: 110).isActive = true
         stack.addArrangedSubview(slider)
-        percent.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         percent.translatesAutoresizingMaskIntoConstraints = false
-        percent.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        percent.widthAnchor.constraint(equalToConstant: 46).isActive = true
         stack.addArrangedSubview(percent)
         addSeparator()
 
@@ -46,22 +57,15 @@ final class WatermarkPanel: FloatingPanelView, NSTextFieldDelegate {
             swatches.append(s)
             stack.addArrangedSubview(s)
         }
-        addSeparator()
-        let remove = NSButton(title: "移除", target: self, action: #selector(removeTapped))
-        remove.bezelStyle = .rounded
-        stack.addArrangedSubview(remove)
-        let done = NSButton(title: "确定", target: self, action: #selector(doneTapped))
-        done.bezelStyle = .rounded
-        done.keyEquivalent = "\r"
-        stack.addArrangedSubview(done)
         refreshSwatches()
     }
 
     func load(_ w: Watermark?) {
         field.stringValue = w?.text ?? ""
-        slider.doubleValue = Double((w?.opacity ?? 0.3) * 100)
-        color = w?.color ?? .black
-        percent.stringValue = "\(Int(slider.doubleValue))%"
+        opacity = w?.opacity ?? Watermark.defaultOpacity
+        slider.doubleValue = Double(opacity)
+        percent.stringValue = "\(Int((opacity * 100).rounded())) %"
+        color = w?.color ?? .red
         refreshSwatches()
     }
 
@@ -69,32 +73,39 @@ final class WatermarkPanel: FloatingPanelView, NSTextFieldDelegate {
         window?.makeFirstResponder(field)
     }
 
-    private var value: Value {
-        Value(text: field.stringValue, opacity: CGFloat(slider.doubleValue / 100), color: color)
+    /// Tests type into the field.
+    func setTextForTesting(_ text: String) {
+        field.stringValue = text
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
     }
+
+    private var value: Value {
+        Value(text: field.stringValue, opacity: opacity, color: color)
+    }
+
+    private func notify() { onChange(value) }
 
     private func pick(_ c: RGBA) {
         color = c
         refreshSwatches()
-        onChange(value)
+        notify()
     }
 
     private func refreshSwatches() {
         for s in swatches { s.isSelected = s.color == color }
     }
 
-    func controlTextDidChange(_ obj: Notification) { onChange(value) }
-
-    @objc private func sliderChanged() {
-        percent.stringValue = "\(Int(slider.doubleValue))%"
-        onChange(value)
+    func controlTextDidChange(_ obj: Notification) {
+        let limited = Watermark.limited(field.stringValue)
+        if limited != field.stringValue { field.stringValue = limited }
+        notify()
     }
 
-    @objc private func removeTapped() {
-        field.stringValue = ""
-        onChange(value)
-        onDone()
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.insertNewline(_:)) {
+            onDone()
+            return true
+        }
+        return false
     }
-
-    @objc private func doneTapped() { onDone() }
 }

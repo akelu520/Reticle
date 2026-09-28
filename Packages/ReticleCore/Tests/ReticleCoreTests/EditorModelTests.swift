@@ -109,7 +109,7 @@ final class EditorModelTests: XCTestCase {
         var m = EditorModel(scale: 2)
         m.tool = .text
         XCTAssertEqual(m.pointerDown(at: CGPoint(x: 5, y: 5)), .beginText(origin: CGPoint(x: 5, y: 5)))
-        XCTAssertEqual(m.pendingTextStyle?.fontSize, 28) // default small 14pt × 2
+        XCTAssertEqual(m.pendingTextStyle?.fontSize, 24) // default 12 pt × 2
         m.finishText("hello")
         XCTAssertEqual(m.document.annotations.first?.text, "hello")
 

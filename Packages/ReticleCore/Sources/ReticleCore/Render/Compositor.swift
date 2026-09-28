@@ -10,7 +10,7 @@ public enum Compositor {
     }
 
     /// Base image cropped to `pixelRect` with annotations and watermark burned in.
-    public static func render(base: CGImage, pixelated: CGImage?, document: Document, crop pixelRect: CGRect) -> CGImage? {
+    public static func render(base: CGImage, effects: EffectSources?, document: Document, crop pixelRect: CGRect) -> CGImage? {
         if document.annotations.isEmpty && document.watermark == nil { return crop(base, to: pixelRect) }
         guard let r = clampedRect(pixelRect, in: base),
               let ctx = CGContext(data: nil, width: Int(r.width), height: Int(r.height), bitsPerComponent: 8, bytesPerRow: 0,
@@ -22,7 +22,7 @@ public enum Compositor {
         ctx.translateBy(x: -r.minX, y: -r.minY)
         let baseSize = CGSize(width: base.width, height: base.height)
         AnnotationRenderer.drawImage(base, in: CGRect(origin: .zero, size: baseSize), ctx: ctx)
-        AnnotationRenderer.draw(document.annotations, pixelated: pixelated, baseSize: baseSize, in: ctx)
+        AnnotationRenderer.draw(document.annotations, effects: effects, baseSize: baseSize, in: ctx)
         if let w = document.watermark {
             AnnotationRenderer.drawWatermark(w, in: r, ctx: ctx)
         }

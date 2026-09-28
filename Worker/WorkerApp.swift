@@ -32,8 +32,7 @@ enum WorkerApp {
         let alert = NSAlert()
         alert.messageText = "录屏失败"
         alert.informativeText = message
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+        alert.runVisibly()
         finish()
     }
 }

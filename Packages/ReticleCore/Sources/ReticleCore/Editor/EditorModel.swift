@@ -32,6 +32,18 @@ public enum SizeLevel: Int, CaseIterable, Codable, Sendable { case small, medium
 public struct ToolPreset: Equatable, Sendable {
     public var color: RGBA
     public var size: SizeLevel
+    /// Text and label size in points (12pt, 14pt, …).
+    public var fontSize: CGFloat = EditorModel.fontSizeChoices[0]
+    public var textStyle: TextStyle = .plain
+    public var effect: MosaicEffect = .mosaic
+    public var strength: CGFloat = 0.5
+    public var shape: HighlightShape = .roundedRect
+    public var opacity: CGFloat = 0.5
+
+    public init(color: RGBA, size: SizeLevel) {
+        self.color = color
+        self.size = size
+    }
 }
 
 /// What the UI should do after a pointer-down.
@@ -80,7 +92,6 @@ public struct EditorModel {
         self.scale = scale
         var p: [Tool: ToolPreset] = [:]
         for t in Tool.allCases { p[t] = ToolPreset(color: .red, size: .small) }
-        p[.highlight]?.color = .yellow
         presets = p
     }
 
@@ -103,7 +114,14 @@ public struct EditorModel {
     public var currentPreset: ToolPreset? {
         guard let target = styleTarget else { return nil }
         if tool == nil, let id = selectedID, let a = document.annotation(id) {
-            return ToolPreset(color: a.style.color, size: sizeLevel(of: a))
+            var p = ToolPreset(color: a.style.color, size: sizeLevel(of: a))
+            p.fontSize = (a.style.fontSize / scale).rounded()
+            p.textStyle = a.style.textStyle
+            p.effect = a.style.effect
+            p.strength = a.style.strength
+            p.shape = a.style.shape
+            p.opacity = a.style.opacity
+            return p
         }
         return preset(for: target)
     }
@@ -122,11 +140,18 @@ public struct EditorModel {
         [14, 18, 24][size.rawValue]
     }
 
+    /// Font sizes offered in the 文本 / 标签 size menu, in points.
+    public static let fontSizeChoices: [CGFloat] = [12, 14, 16, 18, 20, 24, 28, 32, 36, 48]
+
     func style(for tool: Tool) -> Style {
         let p = preset(for: tool)
-        return Style(color: p.color,
-                     lineWidth: Self.lineWidthPoints(tool, p.size) * scale,
-                     fontSize: Self.fontSizePoints(p.size) * scale)
+        var s = Style(color: p.color, lineWidth: Self.lineWidthPoints(tool, p.size) * scale, fontSize: p.fontSize * scale)
+        s.textStyle = p.textStyle
+        s.effect = p.effect
+        s.strength = p.strength
+        s.shape = p.shape
+        s.opacity = p.opacity
+        return s
     }
 
     private func sizeLevel(of a: Annotation) -> SizeLevel {
@@ -137,6 +162,43 @@ public struct EditorModel {
             let rv = (tool.usesFontSize ? Self.fontSizePoints(r) : Self.lineWidthPoints(tool, r)) * scale
             return abs(lv - value) < abs(rv - value)
         } ?? .medium
+    }
+
+    public mutating func setFontSize(_ points: CGFloat) {
+        guard let target = styleTarget else { return }
+        presets[target]?.fontSize = points
+        let px = points * scale
+        updateSelected { $0.style.fontSize = px }
+    }
+
+    public mutating func setTextStyle(_ style: TextStyle) {
+        guard let target = styleTarget else { return }
+        presets[target]?.textStyle = style
+        updateSelected { $0.style.textStyle = style }
+    }
+
+    public mutating func setMosaicEffect(_ effect: MosaicEffect) {
+        guard let target = styleTarget else { return }
+        presets[target]?.effect = effect
+        updateSelected { $0.style.effect = effect }
+    }
+
+    public mutating func setStrength(_ strength: CGFloat) {
+        guard let target = styleTarget else { return }
+        presets[target]?.strength = strength
+        updateSelected { $0.style.strength = strength }
+    }
+
+    public mutating func setHighlightShape(_ shape: HighlightShape) {
+        guard let target = styleTarget else { return }
+        presets[target]?.shape = shape
+        updateSelected { $0.style.shape = shape }
+    }
+
+    public mutating func setOpacity(_ opacity: CGFloat) {
+        guard let target = styleTarget else { return }
+        presets[target]?.opacity = opacity
+        updateSelected { $0.style.opacity = opacity }
     }
 
     public mutating func setColor(_ color: RGBA) {

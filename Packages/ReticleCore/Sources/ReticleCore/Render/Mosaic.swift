@@ -1,3 +1,4 @@
+import Accelerate
 import CoreGraphics
 
 public enum Mosaic {
@@ -22,5 +23,24 @@ public enum Mosaic {
         big.interpolationQuality = .none
         big.draw(tiny, in: CGRect(x: 0, y: CGFloat(h) - scaledH, width: scaledW, height: scaledH))
         return big.makeImage()
+    }
+
+    /// A blurred copy (two tent passes ≈ Gaussian) on the CPU with Accelerate; no Metal.
+    public static func blur(_ image: CGImage, radius: CGFloat) -> CGImage? {
+        let w = image.width, h = image.height
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let src = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: info),
+              let dst = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: info),
+              let srcData = src.data, let dstData = dst.data else { return nil }
+        src.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var a = vImage_Buffer(data: srcData, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: src.bytesPerRow)
+        var b = vImage_Buffer(data: dstData, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: dst.bytesPerRow)
+        // Each tent pass of size k blurs like a box of k twice; split the radius over two passes.
+        let k = UInt32(max(Int(radius), 1)) | 1
+        let flags = vImage_Flags(kvImageEdgeExtend)
+        guard vImageTentConvolve_ARGB8888(&a, &b, nil, 0, 0, k, k, nil, flags) == kvImageNoError,
+              vImageTentConvolve_ARGB8888(&b, &a, nil, 0, 0, k, k, nil, flags) == kvImageNoError else { return nil }
+        return src.makeImage()
     }
 }

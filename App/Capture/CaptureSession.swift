@@ -131,9 +131,7 @@ final class CaptureSession {
         do {
             try WorkerClient.startRecording(request)
         } catch {
-            let alert = NSAlert(error: error)
-            alert.messageText = "无法开始录屏"
-            alert.runModal()
+            ErrorHUD.show("无法开始录屏", error.localizedDescription)
         }
     }
 
@@ -206,12 +204,9 @@ final class CaptureSession {
         onEnd()
     }
 
+    /// Non-blocking: a modal alert here could end up invisible and freeze the app.
     private func showError(_ error: Error) {
         for w in windows { w.orderOut(nil) }
-        let alert = NSAlert()
-        alert.messageText = "截图失败"
-        alert.informativeText = error.localizedDescription
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+        ErrorHUD.show("截图失败", error.localizedDescription)
     }
 }
