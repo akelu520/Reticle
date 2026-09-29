@@ -38,6 +38,11 @@ enum EndToEndTests {
             await endSessionIfNeeded()
             try? await Task.sleep(nanoseconds: 300_000_000)
             print("   内存 \(footprintMB()) MB；存活的遮罩视图 \(OverlayView.debugLiveCount)，遮罩窗口 \(NSApp.windows.filter { $0 is OverlayWindow }.count)")
+            print("   窗口：\(windowSummary())")
+            // AppKit may free closed windows later; ours must be off screen and hold nothing by then.
+            let ours = NSApp.windows.filter { $0 is OverlayWindow || $0 is LongImageWindow || $0 is ScrollControlPanel || $0 is PinWindow }
+            check("\(title)：结束后没有残留的可见窗口", !ours.contains(where: \.isVisible), "\(windowSummary())")
+            check("\(title)：已关闭的窗口不再持有内容", ours.allSatisfy { $0.contentView == nil }, "\(windowSummary())")
         }
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         let memoryAtEnd = footprintMB()
@@ -51,6 +56,7 @@ enum EndToEndTests {
             print("pid \(getpid())，保持 \(Int(s)) 秒供外部测量")
             fflush(stdout)
             try? await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000))
+            print("保持后仍存在的窗口：\(windowSummary())")
         }
 
         let failed = results.filter { !$0.ok }
@@ -285,8 +291,8 @@ enum EndToEndTests {
         let pin = NSApp.windows.compactMap { $0 as? PinWindow }.first { $0.isVisible }
         check("贴图窗口出现在原位置（误差 < 1pt）", pin.map { p in expected.map { abs(p.frame.minX - $0.minX) < 1 && abs(p.frame.minY - $0.minY) < 1 && abs(p.frame.width - $0.width) < 1 } ?? false } == true,
               "\(String(describing: pin?.frame)) vs \(String(describing: expected))")
-        check("贴图 1:1 像素显示", pin.map { abs($0.frame.width * v.snapshot.scale - CGFloat($0.image.width)) < 1 } == true,
-              "frame=\(String(describing: pin?.frame.size)) image=\(String(describing: pin.map { ($0.image.width, $0.image.height) }))")
+        check("贴图 1:1 像素显示", pin.map { abs($0.frame.width * v.snapshot.scale - CGFloat($0.image?.width ?? 0)) < 1 } == true,
+              "frame=\(String(describing: pin?.frame.size)) image=\(String(describing: pin.map { ($0.image?.width ?? 0, $0.image?.height ?? 0) }))")
         check("贴图浮在最上层、所有桌面可见", pin?.level == .floating && pin?.collectionBehavior.contains(.canJoinAllSpaces) == true)
         if let pin, let content = pin.contentView {
             let right = NSEvent.mouseEvent(with: .rightMouseDown, location: CGPoint(x: 10, y: 10), modifierFlags: [], timestamp: 0,
@@ -294,7 +300,7 @@ enum EndToEndTests {
             let menu = content.menu(for: right)
             check("贴图右键菜单：复制/保存…/关闭", menu?.items.map(\.title) == ["复制", "保存…", "关闭"])
             pin.copyImage()
-            check("贴图右键复制", pasteboardImage()?.width == pin.image.width)
+            check("贴图右键复制", pasteboardImage()?.width == pin.image?.width)
             click(content, CGPoint(x: content.bounds.midX, y: content.bounds.midY), count: 2)
             check("双击关闭贴图", await waitUntil { !pin.isVisible })
         }
@@ -583,23 +589,26 @@ enum EndToEndTests {
         check("真实截屏：图像为屏幕像素尺寸", v.snapshot.image.width == Int(screen.frame.width * screen.backingScaleFactor),
               "\(v.snapshot.image.width) vs \(screen.frame.width * screen.backingScaleFactor)")
         check("真实截屏：读取到窗口列表", !v.snapshot.windows.isEmpty, "\(v.snapshot.windows.count)")
-        let overlays = NSApp.windows.compactMap { $0 as? OverlayWindow }.filter(\.isVisible)
-        let views = overlays.compactMap { $0.contentView as? OverlayView }
-        check("真实截屏：每块显示器一个遮罩（\(NSScreen.screens.count) 块）", overlays.count == NSScreen.screens.count)
-        check("真实截屏：每块显示器按各自像素尺寸截取", views.allSatisfy {
-            $0.snapshot.image.width == Int(($0.snapshot.screen.frame.width * $0.snapshot.screen.backingScaleFactor).rounded())
-                && $0.window?.frame == $0.snapshot.screen.frame
-        }, views.map { "\($0.snapshot.screen.localizedName): \($0.snapshot.image.width)×\($0.snapshot.image.height)" }.joined(separator: ", "))
-        if NSScreen.screens.count > 1, let other = views.first(where: { $0 !== v }) {
-            // Selecting on another display clears this one (only one selection at a time).
-            click(v, CGPoint(x: 50, y: 50))
-            drag(other, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 300, y: 250))
-            check("多显示器：在另一块屏幕框选时，原屏幕选区清除", v.selection == nil && other.selection == CGRect(x: 100, y: 100, width: 200, height: 150),
-                  "\(String(describing: v.selection)) / \(String(describing: other.selection))")
-            key(other, 53)
-            _ = await waitUntil { overlay() == nil }
-            guard let again = await startSession(.screenshot) else { helper?.terminate(); return }
-            v = again
+        // Scoped so the test does not keep this session's windows alive afterwards.
+        do {
+            let overlays = NSApp.windows.compactMap { $0 as? OverlayWindow }.filter(\.isVisible)
+            let views = overlays.compactMap { $0.contentView as? OverlayView }
+            check("真实截屏：每块显示器一个遮罩（\(NSScreen.screens.count) 块）", overlays.count == NSScreen.screens.count)
+            check("真实截屏：每块显示器按各自像素尺寸截取", views.allSatisfy {
+                $0.snapshot.image.width == Int(($0.snapshot.screen.frame.width * $0.snapshot.screen.backingScaleFactor).rounded())
+                    && $0.window?.frame == $0.snapshot.screen.frame
+            }, views.map { "\($0.snapshot.screen.localizedName): \($0.snapshot.image.width)×\($0.snapshot.image.height)" }.joined(separator: ", "))
+            if NSScreen.screens.count > 1, let other = views.first(where: { $0 !== v }) {
+                // Selecting on another display clears this one (only one selection at a time).
+                click(v, CGPoint(x: 50, y: 50))
+                drag(other, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 300, y: 250))
+                check("多显示器：在另一块屏幕框选时，原屏幕选区清除", v.selection == nil && other.selection == CGRect(x: 100, y: 100, width: 200, height: 150),
+                      "\(String(describing: v.selection)) / \(String(describing: other.selection))")
+                key(other, 53)
+                _ = await waitUntil { overlay() == nil }
+                guard let again = await startSession(.screenshot) else { helper?.terminate(); return }
+                v = again
+            }
         }
         let local = CGRect(x: helperFrame.minX - screen.frame.minX, y: screen.frame.maxY - helperFrame.maxY,
                            width: helperFrame.width, height: helperFrame.height)
@@ -624,6 +633,7 @@ enum EndToEndTests {
         press(v2, title: "开始滚动截图")
         let panel = await waitFor { NSApp.windows.compactMap { $0 as? ScrollControlPanel }.first { $0.isVisible } }
         check("真实滚动截图：开始采集", panel != nil)
+
         var statuses = Set<String>()
         let until = Date().addingTimeInterval(11)
         while Date() < until, let panel {
@@ -660,6 +670,7 @@ enum EndToEndTests {
         unsetenv("RETICLE_WORKER_SELFTEST")
         let worker = await waitFor { WorkerClient.recordingProcess }
         check("真实录屏：交给 ReticleWorker 录制", worker != nil)
+
         check("真实录屏：worker 录完、预览、导出后退出", await waitUntil(timeout: 40) { WorkerClient.recordingProcess == nil })
         let file = (NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL])?.first { $0.pathExtension == "mp4" }
         if let file {
@@ -809,6 +820,12 @@ enum EndToEndTests {
 
     private static func visibleMode(in root: NSView, _ title: String) -> ModeButton? {
         descendants(of: root, ModeButton.self).first { $0.title == title && !$0.isHiddenOrHasHiddenAncestor }
+    }
+
+    /// App windows other than the menu bar item, as "Type(visible)" / "Type(hidden)".
+    static func windowSummary() -> [String] {
+        NSApp.windows.filter { !String(describing: Swift.type(of: $0)).contains("StatusBar") }
+            .map { "\(Swift.type(of: $0))(\($0.isVisible ? "visible" : "hidden"))" }
     }
 
     private static func descendants<T: NSView>(of root: NSView, _ type: T.Type) -> [T] {

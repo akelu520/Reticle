@@ -210,6 +210,9 @@ final class ScrollCaptureController: NSObject, SCStreamDelegate {
     private func tearDown() {
         frameWindow?.orderOut(nil)
         controls?.orderOut(nil)
+        // AppKit may keep closed windows around for a while; do not let them hold the preview.
+        frameWindow?.contentView = nil
+        controls?.contentView = nil
         frameWindow = nil
         controls = nil
         stream = nil

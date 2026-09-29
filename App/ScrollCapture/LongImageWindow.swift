@@ -8,9 +8,10 @@ import ReticleCore
 final class LongImageWindow: NSWindow, NSWindowDelegate {
     private static var open: [LongImageWindow] = []
 
-    private let image: CGImage
+    // Released when the window closes; AppKit may keep a closed window around for a while.
+    private var image: CGImage?
     private let scale: CGFloat
-    private let document: LongImageDocumentView
+    private var document: LongImageDocumentView?
     private let footer = NSView()
     private var resultBar: FloatingPanelView!
     private var editToolbar: CaptureToolbar!
@@ -26,7 +27,8 @@ final class LongImageWindow: NSWindow, NSWindowDelegate {
     private init(image: CGImage, scale: CGFloat) {
         self.image = image
         self.scale = scale
-        document = LongImageDocumentView(image: image, scale: scale)
+        let document = LongImageDocumentView(image: image, scale: scale)
+        self.document = document
         let visible = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
         let imageSize = document.frame.size
         let width = min(max(imageSize.width + 20, 640), visible.width * 0.9)
@@ -65,16 +67,16 @@ final class LongImageWindow: NSWindow, NSWindowDelegate {
         footer.addSubview(resultBar)
 
         editToolbar = CaptureToolbar(actions: .init(
-            selectTool: { [weak self] in self?.document.editor.toggleTool($0) },
-            undo: { [weak self] in self?.document.editor.undo() },
-            watermark: { [weak self] in self?.document.editor.toggleWatermarkPanel() },
+            selectTool: { [weak self] in self?.document?.editor.toggleTool($0) },
+            undo: { [weak self] in self?.document?.editor.undo() },
+            watermark: { [weak self] in self?.document?.editor.toggleWatermarkPanel() },
             pin: {}, recognizeText: {}, scrollCapture: {},
             cancel: { [weak self] in self?.cancel() },
             save: { [weak self] in self?.save() },
             copy: { [weak self] in self?.copyToPasteboard() }), captureActions: false)
         editToolbar.isHidden = true
         footer.addSubview(editToolbar)
-        document.editor.onChange = { [weak self] in self?.layoutFooter() }
+        document?.editor.onChange = { [weak self] in self?.layoutFooter() }
         layoutFooter()
     }
 
@@ -85,8 +87,7 @@ final class LongImageWindow: NSWindow, NSWindowDelegate {
         let bar: NSView = editToolbar.isHidden ? resultBar : editToolbar
         let size = bar.fittingSize
         bar.frame = CGRect(x: (footer.bounds.width - size.width) / 2, y: 8, width: size.width, height: size.height)
-        guard !editToolbar.isHidden else { return }
-        let editor: AnnotationEditor = document.editor
+        guard !editToolbar.isHidden, let editor = document?.editor else { return }
         editToolbar.update(tool: editor.tool, canUndo: editor.canUndo, watermarkActive: editor.watermarkActive)
         if let panel = editor.secondaryPanel(in: footer) {
             let ps = panel.fittingSize
@@ -101,7 +102,8 @@ final class LongImageWindow: NSWindow, NSWindowDelegate {
     }
 
     private func export() -> CGImage? {
-        document.editor.render(crop: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let image, let document else { return nil }
+        return document.editor.render(crop: CGRect(x: 0, y: 0, width: image.width, height: image.height))
     }
 
     @objc private func copyToPasteboard() {
@@ -133,6 +135,12 @@ final class LongImageWindow: NSWindow, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         Self.open.removeAll { $0 === self }
+        // Free the image and the editor now, once the close has finished.
+        DispatchQueue.main.async { [weak self] in
+            self?.contentView = nil
+            self?.document = nil
+            self?.image = nil
+        }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -146,7 +154,7 @@ final class LongImageWindow: NSWindow, NSWindowDelegate {
         guard let w = open.last, let content = w.contentView else { return }
         content.wantsLayer = true
         w.startEditing()
-        w.document.editor.debugPopulate(in: CGRect(x: 0, y: 0, width: w.document.bounds.width, height: 400))
+        w.document?.editor.debugPopulate(in: CGRect(x: 0, y: 0, width: w.document?.bounds.width ?? 0, height: 400))
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             content.layoutSubtreeIfNeeded()
             content.displayIfNeeded()

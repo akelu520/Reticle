@@ -4,7 +4,8 @@ import ReticleCore
 /// 固定到屏幕：the screenshot floats above other windows. Drag to move,
 /// double-click or Esc to close, right-click for copy / save / close.
 final class PinWindow: NSPanel {
-    let image: CGImage
+    /// Released when the pin closes; AppKit may keep a closed window around for a while.
+    private(set) var image: CGImage?
     var onClose: ((PinWindow) -> Void)?
 
     init(image: CGImage, frame: CGRect, scale: CGFloat) {
@@ -34,9 +35,12 @@ final class PinWindow: NSPanel {
     func dismiss() {
         orderOut(nil)
         onClose?(self)
+        contentView = nil
+        image = nil
     }
 
     @objc func copyImage() {
+        guard let image else { return }
         _ = OutputService.copyToPasteboard(image)
     }
 
@@ -46,7 +50,7 @@ final class PinWindow: NSPanel {
         panel.directoryURL = Preferences.saveDirectory
         panel.nameFieldStringValue = FileNaming.screenshotName(for: Date())
         NSApp.activate(ignoringOtherApps: true)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url, let image else { return }
         do {
             try OutputService.write(image, to: url)
             Preferences.saveDirectory = url.deletingLastPathComponent()

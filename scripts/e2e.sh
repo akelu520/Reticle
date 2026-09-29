@@ -52,6 +52,7 @@ open -n -W --stdout "$LOG" --stderr /dev/null \
   --env RETICLE_E2E_HELPER="$PWD/$OUT/e2e-scroll-target" \
   --env RETICLE_HISTORY_DIR="$PWD/$OUT/history" \
   ${RETICLE_E2E_ONLY:+--env RETICLE_E2E_ONLY="$RETICLE_E2E_ONLY"} \
+  ${RETICLE_E2E_HOLD:+--env RETICLE_E2E_HOLD="$RETICLE_E2E_HOLD"} \
   build/dd/Build/Products/Debug/Reticle.app
 cat "$LOG"
 # `open -W` does not pass the exit status through; the summary line does.
