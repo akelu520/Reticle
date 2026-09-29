@@ -37,26 +37,39 @@ struct RowFeatures {
 
     /// Mean absolute difference between `prev` rows shifted by `dy` and these rows,
     /// over the overlap, sampling every `step` rows. `nil` when the overlap is too small.
-    static func difference(prev: RowFeatures, cur: RowFeatures, dy: Int, step: Int, minOverlap: Int) -> Float? {
+    struct Difference {
+        /// Mean absolute difference, 0–255.
+        var mean: Float
+        /// Share of compared samples that differ by more than `outlierThreshold`: content that
+        /// does not line up. Low-contrast changes (hover highlights, faint watermarks) stay below it.
+        var outliers: Float
+    }
+
+    static let outlierThreshold: Float = 28
+
+    static func difference(prev: RowFeatures, cur: RowFeatures, dy: Int, step: Int, minOverlap: Int) -> Difference? {
         let h = min(prev.height, cur.height)
         let y0 = max(0, -dy), y1 = min(h, h - dy)
         guard y1 - y0 >= minOverlap else { return nil }
         let b = blocks
         var total: Float = 0
+        var outliers = 0
         var count = 0
         var y = y0
         while y < y1 {
             let p = (y + dy) * b, c = y * b
-            for k in 0..<b { total += abs(prev.values[p + k] - cur.values[c + k]) }
+            for k in 0..<b {
+                let d = abs(prev.values[p + k] - cur.values[c + k])
+                total += d
+                if d > outlierThreshold { outliers += 1 }
+            }
             count += b
             y += step
         }
-        return total / Float(count)
+        return Difference(mean: total / Float(count), outliers: Float(outliers) / Float(count))
     }
 }
 
-/// Stitches successive frames of a scrolling region into one tall image.
-/// Supports scrolling both down and up. Not thread-safe; call from one queue.
 public final class ScrollStitcher {
     public enum Update: Equatable, Sendable {
         case started
@@ -77,6 +90,8 @@ public final class ScrollStitcher {
     private var top = 0
     private var bottom = 0
     private var strips: [(y: Int, image: CGImage)] = []
+    /// Shift of the last frame that moved: scrolling is continuous, so the next shift is close to it.
+    private var lastShift = 0
 
     public init(maxHeight: Int = 30000) {
         self.maxHeight = maxHeight
@@ -95,13 +110,18 @@ public final class ScrollStitcher {
             position = 0
             top = 0
             bottom = frame.height
+            lastShift = 0
             return .started
         }
         guard frame.width == width, frame.height == frameHeight else { return .mismatch }
         if height >= maxHeight { return .limitReached }
 
-        guard let dy = Self.estimateShift(prev: reference, cur: features) else { return .mismatch }
-        if dy == 0 { return .unchanged }
+        guard let dy = Self.estimateShift(prev: reference, cur: features, predicted: lastShift) else { return .mismatch }
+        if dy == 0 {
+            lastShift = 0
+            return .unchanged
+        }
+        lastShift = dy
 
         let newPos = position + dy
         if newPos + frameHeight > bottom {
@@ -120,34 +140,59 @@ public final class ScrollStitcher {
     }
 
     /// Vertical offset such that `prev[y + dy] ≈ cur[y]`, or nil when no confident match.
-    static func estimateShift(prev: RowFeatures, cur: RowFeatures) -> Int? {
+    /// Vertical shift of `cur` relative to `prev`, or nil when they do not match.
+    ///
+    /// Candidates are ranked by how much content fails to line up (`outliers`), which low-contrast
+    /// changes such as hover highlights do not affect. Repetitive content (table rows, list items)
+    /// can line up equally well at several shifts; the one closest to `predicted`, the previous
+    /// frame's shift, wins such ties, since scrolling is continuous.
+    static func estimateShift(prev: RowFeatures, cur: RowFeatures, predicted: Int = 0) -> Int? {
         let h = min(prev.height, cur.height)
         let maxShift = Int(Double(h) * 0.8)
         let minOverlap = max(h / 5, 4)
         guard let zero = RowFeatures.difference(prev: prev, cur: cur, dy: 0, step: 1, minOverlap: minOverlap) else { return nil }
-        if zero < 0.5 { return 0 }
+        // Nothing lines up differently: not scrolled (at most a hover effect or animation).
+        if zero.mean < 0.5 || zero.outliers < Self.stillOutliers { return 0 }
 
-        // Coarse search every 4 rows (sampling every 4th row), then refine ±4 at full resolution.
-        var best = (dy: 0, score: Float.greatestFiniteMagnitude)
+        var coarse: [(dy: Int, diff: RowFeatures.Difference)] = []
         var dy = -maxShift
         while dy <= maxShift {
-            if let s = RowFeatures.difference(prev: prev, cur: cur, dy: dy, step: 4, minOverlap: minOverlap), s < best.score {
-                best = (dy, s)
-            }
+            if let d = RowFeatures.difference(prev: prev, cur: cur, dy: dy, step: 4, minOverlap: minOverlap) { coarse.append((dy, d)) }
             dy += 4
         }
-        var refined = (dy: 0, score: Float.greatestFiniteMagnitude)
-        for d in (best.dy - 4)...(best.dy + 4) where abs(d) <= maxShift {
-            if let s = RowFeatures.difference(prev: prev, cur: cur, dy: d, step: 1, minOverlap: minOverlap), s < refined.score {
-                refined = (d, s)
-            }
+        // Local minima of the mean difference are the candidate shifts.
+        var minima = coarse.indices.filter { i in
+            (i == 0 || coarse[i].diff.mean <= coarse[i - 1].diff.mean)
+                && (i == coarse.count - 1 || coarse[i].diff.mean <= coarse[i + 1].diff.mean)
         }
-        // Accept near-exact matches, or clear winners when part of the region is static.
-        guard refined.score < 4 || refined.score < zero * 0.25 else { return nil }
-        return refined.dy
+        // Refine only the promising ones; the coarse pass already separates the rest.
+        if let coarseBest = minima.map({ coarse[$0].diff.outliers }).min() {
+            minima = minima.filter { coarse[$0].diff.outliers <= coarseBest + 0.02 }
+        }
+        let refined = minima.compactMap { i -> (dy: Int, diff: RowFeatures.Difference)? in
+            var best: (dy: Int, diff: RowFeatures.Difference)?
+            for d in (coarse[i].dy - 4)...(coarse[i].dy + 4) where abs(d) <= maxShift {
+                if let diff = RowFeatures.difference(prev: prev, cur: cur, dy: d, step: 1, minOverlap: minOverlap),
+                   best == nil || diff.mean < best!.diff.mean {
+                    best = (d, diff)
+                }
+            }
+            return best
+        }
+        guard let fewest = refined.map(\.diff.outliers).min() else { return nil }
+        let ties = refined.filter { $0.diff.outliers <= fewest + Self.tieOutliers }
+        guard let chosen = ties.min(by: { abs($0.dy - predicted) < abs($1.dy - predicted) }) else { return nil }
+        // Content lines up (a moving fixed overlay or hover may remain), or a close match overall.
+        guard chosen.diff.outliers < Self.matchOutliers || chosen.diff.mean < 4 else { return nil }
+        return chosen.dy
     }
 
-    /// The stitched image, optionally scaled down (for previews).
+    /// Outlier shares: below `stillOutliers` at zero shift means not scrolled; candidates within
+    /// `tieOutliers` of the best are equally good; a match needs fewer than `matchOutliers`.
+    static let stillOutliers: Float = 0.002
+    static let tieOutliers: Float = 0.002
+    static let matchOutliers: Float = 0.03
+
     public func compose(scale: CGFloat = 1) -> CGImage? {
         guard height > 0, width > 0 else { return nil }
         let w = max(Int(CGFloat(width) * scale), 1), h = max(Int(CGFloat(height) * scale), 1)

@@ -95,7 +95,9 @@ final class ScrollCaptureController: NSObject, SCStreamDelegate {
         config.sourceRect = rect
         config.width = Int((rect.width * scale).rounded())
         config.height = Int((rect.height * scale).rounded())
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
+        // 30 fps keeps the shift between frames well under the height of a table row, so
+        // repetitive rows cannot be mistaken for one another.
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
         config.showsCursor = false
         config.queueDepth = 5
         config.pixelFormat = kCVPixelFormatType_32BGRA
