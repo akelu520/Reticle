@@ -12,6 +12,8 @@ final class OverlayView: NSView {
         case move(start: CGPoint, original: CGRect)
         case resize(SelectionHandle)
         case annotate
+        /// Selecting recognized text from caret `anchor`.
+        case selectText(anchor: Int)
     }
 
     let snapshot: ScreenSnapshot
@@ -76,6 +78,8 @@ final class OverlayView: NSView {
     private var textPanel: TextRecognitionPanel?
     /// Identifies the latest OCR run so a stale result is ignored.
     private var recognitionToken = 0
+    /// Recognized text in the selection, selectable in place.
+    private var liveText: LiveTextOverlay!
     /// What the selection contains, for enabling 提取文字 / 识别二维码; nil until scanned.
     private var scanResult: ScanResult?
     private var scannedSelection: CGRect?
@@ -120,6 +124,7 @@ final class OverlayView: NSView {
 
         editor.canvas.isHidden = true
         addSubview(editor.canvas)
+        liveText = LiveTextOverlay(in: self)
         sizeLabel.isHidden = true
         addSubview(sizeLabel)
         magnifier.isHidden = true
@@ -234,6 +239,18 @@ final class OverlayView: NSView {
             case .handled:
                 break
             case .notHandled:
+                if editor.tool == nil, session.mode == .screenshot, let caret = liveText.caret(onTextAt: p) {
+                    // Over recognized text: select it (double-click a word, triple-click a line).
+                    switch event.clickCount {
+                    case 2: liveText.select(liveText.word(at: caret))
+                    case 3...: liveText.select(liveText.line(at: caret))
+                    default:
+                        liveText.select(caret..<caret)
+                        drag = .selectText(anchor: caret)
+                    }
+                    return
+                }
+                liveText.select(0..<0)
                 if editor.tool == nil {
                     if event.clickCount == 2, session.mode == .screenshot {
                         session.copy(from: self)
@@ -271,14 +288,24 @@ final class OverlayView: NSView {
         case .annotate:
             editor.pointerDragged(to: p, constrain: event.modifierFlags.contains(.shift))
             return
+        case let .selectText(anchor):
+            liveText.select(liveText.range(from: anchor, to: liveText.caret(nearest: p)), showsButton: false)
+            return
         case nil:
             return
         }
+        // The selection changes: recognized text no longer matches it.
+        liveText.clear()
         hidePanels()
         updateChrome()
     }
 
     override func mouseUp(with event: NSEvent) {
+        if case .selectText = drag {
+            drag = nil
+            liveText.select(liveText.selected)
+            return
+        }
         if case .annotate = drag {
             drag = nil
             editor.pointerUp()
@@ -310,6 +337,8 @@ final class OverlayView: NSView {
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
+        // ⌘C with text selected in the image copies the text.
+        if event.keyCode == 8, event.modifierFlags.contains(.command), liveText.copySelection() { return }
         if editor.handleKey(event) { return }
         // ⌘C while the loupe shows: copy the color under the cursor, then leave.
         if event.keyCode == 8, event.modifierFlags.contains(.command), !magnifier.isHidden, selection == nil || drag != nil {
@@ -349,6 +378,7 @@ final class OverlayView: NSView {
     }
 
     private func editorChanged() {
+        if editor.tool != nil { liveText.select(0..<0) }
         // With a drawing tool active the selection shows only its outline, no handles.
         handlesLayer.isHidden = selection == nil || editor.tool != nil
         #if DEBUG
@@ -413,6 +443,7 @@ final class OverlayView: NSView {
         guard drag == nil, sel != scannedSelection, session.mode == .screenshot else { return }
         scannedSelection = sel
         scanResult = nil
+        liveText.clear()
         // Until the scan answers, 识别二维码 is unavailable.
         editorChanged()
         pendingScan?.cancel()
@@ -425,10 +456,20 @@ final class OverlayView: NSView {
                 guard let self, self.window != nil, self.scannedSelection == sel else { return }
                 self.scanResult = result
                 self.editorChanged()
+                if result.hasText { self.recognizeLiveText(in: image, for: sel) }
             }
         }
         pendingScan = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    /// Recognizes the selection's text in the background so it can be selected in place.
+    private func recognizeLiveText(in image: CGImage, for sel: CGRect) {
+        Task { @MainActor [weak self] in
+            let lines = (try? await WorkerClient.recognizeLines(in: image)) ?? []
+            guard let self, self.window != nil, self.scannedSelection == sel, self.selection == sel else { return }
+            self.liveText.set(LiveTextLayout(lines: lines), frame: sel)
+        }
     }
 
     private func startRecognition(translate: Bool = false) {
@@ -459,6 +500,7 @@ final class OverlayView: NSView {
 
     /// 关闭 on the text panel: drop the selection so the user can select again.
     private func resetSelection() {
+        liveText.clear()
         closeTextPanel()
         editor.reset()
         selection = nil
@@ -554,6 +596,7 @@ final class OverlayView: NSView {
         switch session.mode {
         case .recognizeText:
             // The text panel replaces the toolbars.
+            liveText.clear()
             toolbar.isHidden = true
             scrollStartBar.isHidden = true
             editor.hideSecondaryPanels()
@@ -654,7 +697,9 @@ final class OverlayView: NSView {
         if let h = SelectionGeometry.handle(at: p, in: sel) {
             cursor(for: h).set()
         } else if sel.contains(p) {
-            (session.mode == .screenshot ? editor.cursor(at: p) : .openHand).set()
+            let c = session.mode == .screenshot ? editor.cursor(at: p) : .openHand
+            // Over recognized text (and no annotation): the text can be selected.
+            (c == .openHand && session.mode == .screenshot && liveText.contains(p) ? .iBeam : c).set()
         } else {
             NSCursor.arrow.set()
         }
@@ -697,6 +742,7 @@ final class OverlayView: NSView {
     }
     var debugHoverRect: CGRect? { hoverRect }
     var debugEditor: AnnotationEditor { editor }
+    var debugLiveText: LiveTextOverlay { liveText }
 
     /// Test hook: set a selection, optionally add sample annotations, and render the layer tree to a PNG.
     func debugRender(selection sel: CGRect?, cursor: CGPoint, annotate: Bool = false, to url: URL) {

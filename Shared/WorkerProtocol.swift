@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ReticleCore
 
 /// Contract between Reticle and ReticleWorker, the helper process that runs
 /// memory-heavy features (Vision OCR, recording with AVFoundation) so their
@@ -21,6 +22,8 @@ enum WorkerProtocol {
 
     struct OCRResponse: Codable {
         var text: String?
+        /// The lines with their positions, for selecting text in place.
+        var lines: [RecognizedLine]?
         var error: String?
     }
 

@@ -31,9 +31,18 @@ enum WorkerClient {
     // MARK: - OCR
 
     static func recognizeText(in image: CGImage) async throws -> String {
+        try await recognize(image).text ?? ""
+    }
+
+    /// Recognized lines with character positions, for selecting text in place.
+    static func recognizeLines(in image: CGImage) async throws -> [RecognizedLine] {
+        try await recognize(image).lines ?? []
+    }
+
+    private static func recognize(_ image: CGImage) async throws -> WorkerProtocol.OCRResponse {
         let response = try await imageCommand(.ocr, image, as: WorkerProtocol.OCRResponse.self)
         if let error = response.error { throw NSError(domain: "ReticleWorker", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }
-        return response.text ?? ""
+        return response
     }
 
     /// Whether `image` contains text, and any QR code payloads.

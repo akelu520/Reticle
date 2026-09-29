@@ -22,7 +22,8 @@ public enum TextRecognizer {
                     let lines = (request.results ?? []).compactMap { o -> RecognizedLine? in
                         guard let best = o.topCandidates(1).first else { return nil }
                         let b = o.boundingBox // normalized, bottom-left origin
-                        return RecognizedLine(text: best.string, box: CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height))
+                        return RecognizedLine(text: best.string, box: CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height),
+                                              characterBoxes: characterBoxes(of: best))
                     }
                     continuation.resume(returning: lines)
                 } catch {
@@ -33,6 +34,20 @@ public enum TextRecognizer {
     }
 
     /// Recognized text in reading order; empty when nothing was found.
+    /// Per-character boxes, top-left origin; empty if Vision cannot place every character.
+    static func characterBoxes(of text: VNRecognizedText) -> [CGRect] {
+        let string = text.string
+        var boxes: [CGRect] = []
+        var i = string.startIndex
+        while i < string.endIndex {
+            let next = string.index(after: i)
+            guard let b = (try? text.boundingBox(for: i..<next))?.boundingBox else { return [] }
+            boxes.append(CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height))
+            i = next
+        }
+        return boxes
+    }
+
     public static func text(in image: CGImage) async throws -> String {
         ReadingOrder.text(from: try await recognize(image))
     }

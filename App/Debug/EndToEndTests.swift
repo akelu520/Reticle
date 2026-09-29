@@ -360,6 +360,46 @@ enum EndToEndTests {
         check("空白选区：提取文字与识别二维码都不可用",
               await waitUntil(timeout: 10) { visibleButton(in: v3, tip: "提取文字")?.isEnabled == false }
               && visibleButton(in: v3, tip: "识别二维码")?.isEnabled == false)
+        key(v3, 53)
+        _ = await waitUntil { overlay() == nil }
+
+        // Live Text: select text right in the screenshot and copy it.
+        guard let v4 = await startSession(.screenshot) else { return }
+        drag(v4, from: textRegion.origin, to: CGPoint(x: textRegion.maxX, y: textRegion.maxY))
+        let selectionBefore = v4.selection
+        check("框选后可直接选中图片中的文字", await waitUntil(timeout: 15) { v4.debugLiveText.isReady })
+        if let line = v4.debugLiveText.debugLineFrames.first {
+            NSPasteboard.general.clearContents()
+            drag(v4, from: CGPoint(x: line.minX + 1, y: line.midY), to: CGPoint(x: line.maxX - 1, y: line.midY))
+            check("拖选文字后出现复制按钮", visibleButton(in: v4, title: "复制") != nil)
+            if let dir = ProcessInfo.processInfo.environment["RETICLE_E2E_SAVE_DIR"] {
+                // A look at the highlight and the 复制 button, for review.
+                let r = textRegion.insetBy(dx: -20, dy: -50)
+                let shot = Process()
+                shot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                shot.arguments = ["-x", "-R", "\(Int(r.minX)),\(Int(r.minY)),\(Int(r.width)),\(Int(r.height))", dir + "/live-text.png"]
+                try? shot.run()
+                shot.waitUntilExit()
+            }
+            key(v4, 8, chars: "c", flags: .command)
+            check("拖选文字 + ⌘C 复制文字", NSPasteboard.general.string(forType: .string) == "Reticle demo",
+                  NSPasteboard.general.string(forType: .string) ?? "nil")
+            check("拖选文字不移动选区", v4.selection == selectionBefore)
+            click(v4, CGPoint(x: line.minX + line.width * 0.15, y: line.midY), count: 2)
+            press(v4, title: "复制")
+            check("双击选中单词，点复制按钮复制", NSPasteboard.general.string(forType: .string) == "Reticle",
+                  NSPasteboard.general.string(forType: .string) ?? "nil")
+            // Away from the corner handles and below the text line.
+            click(v4, CGPoint(x: textRegion.minX + 30, y: textRegion.maxY - 12))
+            check("点空白处取消文字选择", v4.debugLiveText.selectedText == nil && visibleButton(in: v4, title: "复制") == nil,
+                  "\(v4.debugLiveText.selectedText ?? "nil") line=\(line) region=\(textRegion)")
+            press(v4, tip: "矩形")
+            drag(v4, from: CGPoint(x: line.minX + 1, y: line.minY + 1), to: CGPoint(x: line.maxX - 1, y: line.maxY - 1))
+            check("选了标注工具时在文字上拖动是画标注", v4.debugLiveText.selectedText == nil && v4.debugEditor.model.document.annotations.count == 1,
+                  "text=\(v4.debugLiveText.selectedText ?? "nil") annotations=\(v4.debugEditor.model.document.annotations.count) tool=\(String(describing: v4.debugEditor.tool))")
+        }
+        key(v4, 53)
+        _ = await waitUntil { overlay() == nil }
     }
 
     static func testScrollCapture() async {

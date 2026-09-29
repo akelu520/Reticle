@@ -47,7 +47,9 @@ enum OCRCommand {
                       let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
                     throw CocoaError(.fileReadCorruptFile)
                 }
-                response.text = try await TextRecognizer.text(in: image)
+                let lines = try await TextRecognizer.recognize(image)
+                response.lines = lines
+                response.text = ReadingOrder.text(from: lines)
             } catch {
                 response.error = error.localizedDescription
             }

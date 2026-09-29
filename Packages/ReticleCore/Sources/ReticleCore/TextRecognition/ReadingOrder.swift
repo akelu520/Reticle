@@ -2,19 +2,29 @@ import CoreGraphics
 import Foundation
 
 /// One line of recognized text. `box` is normalized (0...1) with a top-left origin.
-public struct RecognizedLine: Equatable, Sendable {
+public struct RecognizedLine: Equatable, Sendable, Codable {
     public var text: String
     public var box: CGRect
+    /// One box per character of `text`, normalized like `box`; empty when unknown.
+    public var characterBoxes: [CGRect]
 
-    public init(text: String, box: CGRect) {
+    public init(text: String, box: CGRect, characterBoxes: [CGRect] = []) {
         self.text = text
         self.box = box
+        self.characterBoxes = characterBoxes
     }
 }
 
 /// Turns loose OCR lines into readable text: rows top to bottom, left to right within a row.
 public enum ReadingOrder {
     public static func text(from lines: [RecognizedLine]) -> String {
+        rows(from: lines).map { row in
+            row.map(\.text).reduce("") { joined, next in joined + separator(joining: joined, next) + next }
+        }.joined(separator: "\n")
+    }
+
+    /// Lines grouped into rows, top to bottom, each row left to right.
+    public static func rows(from lines: [RecognizedLine]) -> [[RecognizedLine]] {
         var rows: [[RecognizedLine]] = []
         for line in lines.sorted(by: { $0.box.minY < $1.box.minY }) {
             // Same row when the line's vertical center falls inside the row's first line.
@@ -24,12 +34,13 @@ public enum ReadingOrder {
                 rows.append([line])
             }
         }
-        return rows.map { row in
-            row.sorted { $0.box.minX < $1.box.minX }.map(\.text).reduce("") { joined, next in
-                guard let last = joined.last, let first = next.first else { return joined + next }
-                return joined + (last.isCJK || first.isCJK ? "" : " ") + next
-            }
-        }.joined(separator: "\n")
+        return rows.map { $0.sorted { $0.box.minX < $1.box.minX } }
+    }
+
+    /// What goes between two pieces of text on one row: nothing next to CJK, otherwise a space.
+    static func separator(joining a: String, _ b: String) -> String {
+        guard let last = a.last, let first = b.first else { return "" }
+        return last.isCJK || first.isCJK ? "" : " "
     }
 }
 
