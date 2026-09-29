@@ -39,13 +39,20 @@ final class WebPageStitchTests: XCTestCase {
     }
 
     /// One captured frame at scroll `offset`; fixed overlays are drawn in viewport coordinates.
-    static func frame(page height: Int, at offset: Int, hoverRow: Int? = nil, widget: Bool = true) -> CGImage {
+    static func frame(page height: Int, at offset: Int, hoverRow: Int? = nil, widget: Bool = true, stickyHeader: Bool = false) -> CGImage {
         let ctx = CGContext(data: nil, width: width, height: viewport, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         drawPage(ctx, height: height, offset: offset, hoverRow: hoverRow)
         // Watermark fixed to the viewport.
         ctx.setFillColor(CGColor(gray: 0.5, alpha: 0.08))
         for gy in stride(from: 20, to: viewport, by: 110) { for gx in stride(from: 30, to: width, by: 220) { ctx.fill(CGRect(x: gx, y: gy, width: 90, height: 12)) } }
+        // A sticky navigation bar over the top of the viewport.
+        if stickyHeader {
+            ctx.setFillColor(CGColor(gray: 0.15, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: viewport - 44, width: width, height: 44))
+            ctx.setFillColor(CGColor(gray: 0.9, alpha: 1))
+            for i in 0..<5 { ctx.fill(CGRect(x: 16 + i * 90, y: viewport - 28, width: 60, height: 10)) }
+        }
         // Floating button fixed at the bottom right.
         if widget {
             ctx.setFillColor(CGColor(red: 0.4, green: 0.3, blue: 0.9, alpha: 1))
@@ -134,5 +141,47 @@ final class WebPageStitchTests: XCTestCase {
             }
             XCTAssertEqual(s.height, pageHeight, "run \(run): the whole page")
         }
+    }
+
+    /// Pixels of the floating button's color in `image`.
+    static func widgetPixels(_ image: CGImage) -> Int {
+        let w = image.width, h = image.height
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = ctx.data!.assumingMemoryBound(to: UInt8.self)
+        var n = 0
+        for i in 0..<(w * h) where px[i * 4 + 2] > 200 && px[i * 4] < 140 && px[i * 4 + 1] < 110 { n += 1 }
+        return n
+    }
+
+    /// A button fixed to the viewport appears once in the long image, not in every new strip.
+    func testFloatingButtonAppearsOnce() throws {
+        let pageHeight = 2400
+        let single = Self.widgetPixels(Self.frame(page: pageHeight, at: 0))
+        XCTAssertGreaterThan(single, 300)
+        let s = ScrollStitcher()
+        _ = s.add(Self.frame(page: pageHeight, at: 0))
+        var offset = 0
+        while offset < pageHeight - Self.viewport {
+            offset = min(offset + 70, pageHeight - Self.viewport)
+            _ = s.add(Self.frame(page: pageHeight, at: offset, hoverRow: offset / 64 % 5))
+        }
+        let image = try XCTUnwrap(s.compose())
+        XCTAssertEqual(image.height, pageHeight)
+        XCTAssertLessThanOrEqual(Self.widgetPixels(image), single + single / 5, "the floating button is repeated")
+    }
+
+    /// A sticky top bar never scrolls; the content below it still stitches.
+    func testStickyHeaderStitches() throws {
+        let pageHeight = 1800
+        let s = ScrollStitcher()
+        _ = s.add(Self.frame(page: pageHeight, at: 0, stickyHeader: true))
+        var offset = 0
+        while offset < pageHeight - Self.viewport {
+            offset = min(offset + 60, pageHeight - Self.viewport)
+            _ = s.add(Self.frame(page: pageHeight, at: offset, stickyHeader: true))
+        }
+        XCTAssertEqual(s.height, pageHeight)
     }
 }
