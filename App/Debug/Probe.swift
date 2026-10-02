@@ -1,20 +1,17 @@
 #if DEBUG
 import AppKit
 import ScreenCaptureKit
-import Translation
 
-/// `RETICLE_DEBUG_PROBE=1`: prints permission and translation-availability state and tries one real capture.
+/// `RETICLE_DEBUG_PROBE=1`: prints permission state, tries one online translation and one real capture.
 @MainActor
 enum Probe {
     static func run() async {
         print("屏幕录制权限 CGPreflightScreenCaptureAccess = \(CGPreflightScreenCaptureAccess())")
         print("辅助功能权限 AXIsProcessTrusted = \(AXIsProcessTrusted())")
-        if #available(macOS 15, *) {
-            let availability = LanguageAvailability()
-            for (from, to) in [("en", "zh-Hans"), ("zh-Hans", "en")] {
-                let status = await availability.status(from: Locale.Language(identifier: from), to: Locale.Language(identifier: to))
-                print("翻译 \(from)→\(to)：\(status)")
-            }
+        do {
+            print("在线翻译 Hello world → \(try await OnlineTranslator.shared.translate("Hello world", to: "zh-Hans"))")
+        } catch {
+            print("在线翻译失败：\(error.localizedDescription)")
         }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

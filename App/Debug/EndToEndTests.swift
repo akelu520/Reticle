@@ -319,14 +319,14 @@ enum EndToEndTests {
         press(v, title: "复制")
         check("复制全文", NSPasteboard.general.string(forType: .string)?.contains("Reticle demo") == true)
 
-        if #available(macOS 15, *) {
-            press(v, title: "翻译")
-            // Installed language data → translation; otherwise explicit download guidance (never a silent hang).
-            let settled = await waitUntil(timeout: 15) { visibleButton(in: v, title: "原文") != nil || visibleButton(in: v, title: "去下载") != nil }
-            let translated = visibleButton(in: v, title: "原文") != nil
-            check("翻译：返回译文，或未下载语言包时提示“去下载”", settled, panelStatus(v) ?? "")
-            notes.append(translated ? "翻译结果：\(panelText(v) ?? "")" : "翻译：本机未下载语言包，显示“\(panelStatus(v) ?? "")”")
-        }
+        // Online translation of the recognized text (needs the network).
+        press(v, title: "翻译")
+        let translated = await waitUntil(timeout: 20) { visibleButton(in: v, title: "原文") != nil }
+        check("翻译：在线返回译文并切换为“原文”按钮", translated && panelText(v)?.contains("Reticle demo") == false,
+              "\(panelStatus(v) ?? "") / \(panelText(v) ?? "")")
+        notes.append("翻译结果：\(panelText(v) ?? "")")
+        press(v, title: "原文")
+        check("翻译：点“原文”恢复识别结果", panelText(v)?.contains("Reticle demo") == true, panelText(v) ?? "")
 
         // Scrolling long text: vertical only, following the wheel without jumps.
         if let panel = descendants(of: v, TextRecognitionPanel.self).first {
@@ -362,6 +362,11 @@ enum EndToEndTests {
         press(v2, tip: "提取文字")
         check("工具栏入口提取文字", await waitUntil(timeout: 15) { panelText(v2)?.contains("Reticle demo") == true }, panelText(v2) ?? "nil")
         notes.append("提取文字后主进程内存 \(footprintMB()) MB（Vision 在 ReticleWorker 中，识别完即退出）")
+        press(v2, tip: "关闭")
+        drag(v2, from: textRegion.origin, to: CGPoint(x: textRegion.maxX, y: textRegion.maxY))
+        press(v2, tip: "翻译")
+        check("工具栏入口翻译：识别后直接显示译文", await waitUntil(timeout: 25) { visibleButton(in: v2, title: "原文") != nil },
+              "\(panelStatus(v2) ?? "") / \(panelText(v2) ?? "")")
         check("含文字的选区：可提取文字，无二维码时识别二维码不可用",
               await waitUntil(timeout: 10) { visibleButton(in: v2, tip: "识别二维码")?.isEnabled == false }
               && visibleButton(in: v2, tip: "提取文字")?.isEnabled == true)

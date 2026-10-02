@@ -2,7 +2,7 @@ import AppKit
 import ReticleCore
 
 /// 提取文字面板：editable recognized text with clickable links, 复制 (full text),
-/// 关闭 (re-select), and 翻译 on macOS 15+. Also shows 识别二维码 results.
+/// 关闭 (re-select), and 翻译 (online). Also shows 识别二维码 results.
 final class TextRecognitionPanel: NSView, NSTextViewDelegate {
     struct Actions {
         var close: () -> Void
@@ -19,11 +19,9 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
     private let copyButton = NSButton(title: "复制", target: nil, action: nil)
     private let translateButton = NSButton(title: "翻译", target: nil, action: nil)
     private let targetPopup = NSPopUpButton()
-    private let downloadButton = NSButton(title: "去下载", target: nil, action: nil)
     private var original = ""
     private var translated: String?
     private var showingTranslation = false
-    private var translatorBox: AnyObject?
 
     init(actions: Actions) {
         self.actions = actions
@@ -98,31 +96,20 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
         copyButton.frame = CGRect(x: Self.size.width - 84, y: footerY, width: 74, height: 28)
         addSubview(copyButton)
 
-        if #available(macOS 15, *) {
-            for (code, name) in TranslationLanguages.all {
-                targetPopup.addItem(withTitle: name)
-                targetPopup.lastItem?.representedObject = code
-            }
-            targetPopup.frame = CGRect(x: 10, y: footerY + 2, width: 110, height: 24)
-            targetPopup.controlSize = .small
-            targetPopup.target = self
-            targetPopup.action = #selector(targetChanged)
-            addSubview(targetPopup)
-            translateButton.bezelStyle = .rounded
-            translateButton.target = self
-            translateButton.action = #selector(toggleTranslation)
-            translateButton.frame = CGRect(x: 124, y: footerY, width: 74, height: 28)
-            addSubview(translateButton)
-            let translator = Translator()
-            translatorBox = translator
-            addSubview(translator.hostView)
-            downloadButton.bezelStyle = .rounded
-            downloadButton.target = self
-            downloadButton.action = #selector(openLanguageSettings)
-            downloadButton.frame = CGRect(x: Self.size.width - 84 - 80, y: footerY, width: 76, height: 28)
-            downloadButton.isHidden = true
-            addSubview(downloadButton)
+        for (code, name) in TranslationLanguages.all {
+            targetPopup.addItem(withTitle: name)
+            targetPopup.lastItem?.representedObject = code
         }
+        targetPopup.frame = CGRect(x: 10, y: footerY + 2, width: 110, height: 24)
+        targetPopup.controlSize = .small
+        targetPopup.target = self
+        targetPopup.action = #selector(targetChanged)
+        addSubview(targetPopup)
+        translateButton.bezelStyle = .rounded
+        translateButton.target = self
+        translateButton.action = #selector(toggleTranslation)
+        translateButton.frame = CGRect(x: 124, y: footerY, width: 74, height: 28)
+        addSubview(translateButton)
         showLoading()
     }
 
@@ -228,48 +215,33 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
         }
     }
 
+    private var translationToken = 0
+
     private func runTranslation() {
-        guard #available(macOS 15, *), let translator = translatorBox as? Translator,
-              let target = targetPopup.selectedItem?.representedObject as? String else { return }
+        guard let target = targetPopup.selectedItem?.representedObject as? String else { return }
         translateButton.isEnabled = false
-        downloadButton.isHidden = true
         status.stringValue = "翻译中…"
         let text = original
+        translationToken += 1
+        let token = translationToken
         Task { @MainActor [weak self] in
-            switch await Translator.readiness(source: TranslationLanguages.detectedSource(for: text), target: target) {
-            case .ready:
-                self?.performTranslation(translator, text: text, target: target)
-            case .needsDownload:
-                self?.translateButton.isEnabled = true
-                self?.status.stringValue = "首次翻译需下载语言包：系统设置 › 通用 › 语言与地区 › 翻译语言"
-                self?.downloadButton.isHidden = false
-            case .unsupported:
-                self?.translateButton.isEnabled = true
-                self?.status.stringValue = "暂不支持该语言的翻译"
+            let result: Result<String, Error>
+            do {
+                result = .success(try await OnlineTranslator.shared.translate(text, to: target))
+            } catch {
+                result = .failure(error)
             }
-        }
-    }
-
-    @available(macOS 15, *)
-    private func performTranslation(_ translator: Translator, text: String, target: String) {
-        translator.translate(text, to: target) { [weak self] result in
-            guard let self else { return }
+            // A newer request (another language, new text) wins.
+            guard let self, self.translationToken == token else { return }
             self.translateButton.isEnabled = true
-            self.status.stringValue = ""
             switch result {
-            case let .success(text):
-                self.translated = text
-                self.showTranslation(text)
+            case let .success(translation):
+                self.status.stringValue = ""
+                self.translated = translation
+                self.showTranslation(translation)
             case let .failure(error):
                 self.status.stringValue = "翻译失败：\(error.localizedDescription)"
             }
-        }
-    }
-
-    @objc private func openLanguageSettings() {
-        // Goes through openLink so the capture overlay closes and Settings is visible.
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension") {
-            actions.openLink(url)
         }
     }
 
