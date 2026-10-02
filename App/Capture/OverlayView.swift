@@ -589,7 +589,8 @@ final class OverlayView: NSView {
             if x + size.width > bounds.maxX { x = sel.minX - Self.panelGap - size.width }
             if x < bounds.minX { x = bounds.maxX - size.width - Self.panelGap }
             let y = min(max(sel.minY, bounds.minY), bounds.maxY - size.height)
-            panel.frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
+            // On whole pixels: a fractional origin makes the scrolling text inside shimmer.
+            panel.frame = backingAlignedRect(CGRect(origin: CGPoint(x: x, y: y), size: size), options: .alignAllEdgesNearest)
             panel.isHidden = false
         }
 

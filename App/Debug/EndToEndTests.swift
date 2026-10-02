@@ -328,6 +328,29 @@ enum EndToEndTests {
             notes.append(translated ? "翻译结果：\(panelText(v) ?? "")" : "翻译：本机未下载语言包，显示“\(panelStatus(v) ?? "")”")
         }
 
+        // Scrolling long text: vertical only, following the wheel without jumps.
+        if let panel = descendants(of: v, TextRecognitionPanel.self).first {
+            panel.show(text: (1...60).map { "第 \($0) 行 line \($0) " + String(repeating: "很长的一行文字", count: 6) }.joined(separator: "\n"))
+            v.window?.contentView?.layoutSubtreeIfNeeded()
+            if let scroll = descendants(of: panel, NSScrollView.self).first, let tv = scroll.documentView {
+                check("长文本：可上下滚动，不会左右溢出", tv.frame.height > scroll.contentSize.height + 100 && tv.frame.width <= scroll.contentSize.width + 0.5,
+                      "文档 \(tv.frame.size)，可见 \(scroll.contentSize)")
+                var ys: [CGFloat] = [], xs: [CGFloat] = []
+                for i in 0..<12 {
+                    // Mostly downward, with sideways jitter like a trackpad.
+                    if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: -12, wheel2: i % 2 == 0 ? 8 : -8, wheel3: 0),
+                       let e = NSEvent(cgEvent: cg) {
+                        scroll.scrollWheel(with: e)
+                    }
+                    ys.append(scroll.contentView.bounds.minY)
+                    xs.append(scroll.contentView.bounds.minX)
+                }
+                let steps = zip(ys.dropFirst(), ys).map { $0 - $1 }
+                check("长文本：滚动不左右晃动", xs.allSatisfy { $0 == 0 }, "\(xs) panel=\(panel.frame) clip=\(scroll.contentView.frame)")
+                check("长文本：每次滚动等距向下，没有跳动", steps.allSatisfy { abs($0 - 12) < 0.5 }, "\(steps)")
+            }
+        }
+
         press(v, tip: "关闭")
         check("关闭面板后重新框选", v.selection == nil && descendants(of: v, TextRecognitionPanel.self).isEmpty)
         key(v, 53)

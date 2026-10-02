@@ -60,10 +60,21 @@ final class TextRecognitionPanel: NSView, NSTextViewDelegate {
 
         let scroll = NSScrollView(frame: CGRect(x: 10, y: 36, width: Self.size.width - 20, height: Self.size.height - 36 - 46))
         scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        // Text wraps to the width: scroll vertically only, without sideways drift or bounce.
+        scroll.horizontalScrollElasticity = .none
         scroll.borderType = .noBorder
         scroll.drawsBackground = false
+        // A standard scrolling text view: grows with its text, wraps at the visible width.
         textView.frame = CGRect(origin: .zero, size: scroll.contentSize)
+        textView.minSize = CGSize(width: 0, height: scroll.contentSize.height)
+        textView.maxSize = CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = CGSize(width: scroll.contentSize.width, height: .greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
         textView.isRichText = false
         textView.font = .systemFont(ofSize: 13)
         textView.textColor = .black
