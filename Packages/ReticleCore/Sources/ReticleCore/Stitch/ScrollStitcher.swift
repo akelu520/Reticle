@@ -56,9 +56,13 @@ struct RowFeatures {
     }
 
     /// Compares `prev` shifted by `dy` with `cur`, skipping samples in `mask` in either frame.
-    static func difference(prev: RowFeatures, cur: RowFeatures, dy: Int, step: Int, minOverlap: Int, ignoring mask: [Bool]? = nil) -> Difference? {
+    /// With `band`, only rows inside it in both frames are compared (the page's content rows,
+    /// between fixed bars), and the overlap must be that large within the band.
+    static func difference(prev: RowFeatures, cur: RowFeatures, dy: Int, step: Int, minOverlap: Int, ignoring mask: [Bool]? = nil,
+                           band: Range<Int>? = nil) -> Difference? {
         let h = min(prev.height, cur.height)
-        let y0 = max(0, -dy), y1 = min(h, h - dy)
+        let rows = band ?? 0..<h
+        let y0 = max(0, -dy, rows.lowerBound, rows.lowerBound - dy), y1 = min(h, h - dy, rows.upperBound, rows.upperBound - dy)
         guard y1 - y0 >= minOverlap else { return nil }
         let b = blocks
         var total: Float = 0
@@ -91,6 +95,38 @@ struct RowFeatures {
         // Too little moving content in the overlap to judge.
         guard count >= max(b, (y1 - y0) / step * b / 50) else { return nil }
         return Difference(mean: total / Float(count), outliers: Float(outliers) / Float(count))
+    }
+
+    /// Samples of row `ya` in `a` and row `yb` in `b` that clearly differ.
+    static func differingSamples(_ a: RowFeatures, _ ya: Int, _ b: RowFeatures, _ yb: Int) -> Int {
+        let n = blocks
+        var count = 0
+        for k in 0..<n where abs(a.values[ya * n + k] - b.values[yb * n + k]) > outlierThreshold { count += 1 }
+        return count
+    }
+
+    /// How many rows at the top and at the bottom are exactly the same in both frames.
+    static func unchangedEdges(prev: RowFeatures, cur: RowFeatures) -> (top: Int, bottom: Int) {
+        let h = min(prev.height, cur.height), n = blocks
+        func unchanged(_ y: Int) -> Bool { (0..<n).allSatisfy { abs(cur.values[y * n + $0] - prev.values[y * n + $0]) < stillThreshold } }
+        let top = (0..<h).first { !unchanged($0) } ?? h
+        let bottom = (0..<h).first { !unchanged(h - 1 - $0) } ?? h
+        return (top, bottom)
+    }
+
+    /// Whether row `y` shows something fixed to the viewport (an input box, a fade, a title bar)
+    /// rather than page content scrolling by `dy`. Checked both ways: what `cur` shows there
+    /// differs from the content that scrolled in, and what `prev` showed there differs from where
+    /// that content went. A "ghost" — page content next to a fixed button, compared against the
+    /// button — passes only the first check; plain background passes neither.
+    ///
+    /// Next to the frame edge there is nothing one shift away; there an unchanged row that differs
+    /// from the content that scrolled in counts (an opaque bar).
+    static func rowIsFixed(_ y: Int, prev: RowFeatures, cur: RowFeatures, dy: Int) -> Bool {
+        let h = min(prev.height, cur.height), n = blocks
+        guard y + dy >= 0, y + dy < h, differingSamples(cur, y, prev, y + dy) >= 2 else { return false }
+        if y - dy >= 0, y - dy < h { return differingSamples(prev, y, cur, y - dy) >= 2 }
+        return (0..<n).allSatisfy { abs(cur.values[y * n + $0] - prev.values[y * n + $0]) < stillThreshold }
     }
 
     /// Regions fixed to the viewport while the content scrolled by `dy`: unchanged in place,
@@ -161,7 +197,24 @@ public final class ScrollStitcher {
     private var position = 0
     private var top = 0
     private var bottom = 0
-    private var strips: [(y: Int, image: CGImage)] = []
+    /// Pieces of the long image in the order they were taken: strips of new rows (full width)
+    /// and patches; later pieces cover earlier ones. `y` in stitch coordinates.
+    private var pieces: [(x: Int, y: Int, image: CGImage)] = []
+    /// Where the long image ends, including the last frame's fixed footer (`bottom` is where the
+    /// page content proven so far ends; anything below it is replaced by the next strip).
+    private var end = 0
+    /// Where the long image starts, including the first frame's fixed header (`top` is where the
+    /// page content proven so far starts; anything above it is replaced by the next strip up).
+    private var start = 0
+    /// Rows from here down to the bottom of the viewport stay put (an input box, a fade): the page
+    /// content of a frame ends here. Learned from frames that could show it.
+    private var footerTop: Int?
+    /// Rows above this stay put (a title bar, a fade): the page content of a frame starts here.
+    private var headerBottom: Int?
+    /// Positions of the frames whose rows were taken below / above earlier edges: when an edge is
+    /// found to reach further, those rows near it showed the fade, and are patched later.
+    private var appendedAt: [Int] = []
+    private var prependedAt: [Int] = []
     /// Shift of the last frame that moved: scrolling is continuous, so the next shift is close to it.
     private var lastShift = 0
     /// Viewport regions (pixels, top-down) that stay put while the page scrolls: floating buttons,
@@ -170,24 +223,29 @@ public final class ScrollStitcher {
     /// Areas of the long image (y in stitch coordinates) that show a fixed region instead of the
     /// page; replaced once a later frame shows the page there.
     private var covered: [CGRect] = []
-    private var patches: [(rect: CGRect, image: CGImage)] = []
 
     public init(maxHeight: Int = 30000) {
         self.maxHeight = maxHeight
     }
 
-    public var height: Int { bottom - top }
+    public var height: Int { end - start }
 
     public func add(_ frame: CGImage) -> Update {
         guard let features = RowFeatures(frame) else { return .mismatch }
         guard let reference else {
             width = frame.width
             frameHeight = frame.height
-            strips = Self.copy(frame, rows: 0..<frame.height).map { [(0, $0)] } ?? []
+            pieces = Self.copy(frame, rows: 0..<frame.height).map { [(0, 0, $0)] } ?? []
             self.reference = features
             position = 0
             top = 0
             bottom = frame.height
+            end = frame.height
+            start = 0
+            footerTop = nil
+            headerBottom = nil
+            appendedAt = [0]
+            prependedAt = [0]
             lastShift = 0
             return .started
         }
@@ -195,16 +253,24 @@ public final class ScrollStitcher {
         if height >= maxHeight { return .limitReached }
 
         let still = RowFeatures.stillMask(prev: reference, cur: features)
-        var shift = Self.estimateShift(prev: reference, cur: features, predicted: lastShift, ignoring: fixedMask)
-        if shift == nil {
-            // Something fixed to the viewport, e.g. a sticky bar, may spoil the match. Leave out
-            // everything that stayed put to find it, then match again without just that.
-            if let guess = Self.estimateShift(prev: reference, cur: features, predicted: lastShift, ignoring: still), guess != 0 {
-                let found = RowFeatures.fixedRegions(prev: reference, cur: features, dy: guess, still: still)
-                if addFixed(found), let again = Self.estimateShift(prev: reference, cur: features, predicted: lastShift, ignoring: fixedMask),
-                   abs(again - guess) <= 4 {
-                    shift = again
-                }
+        // The whole frame, and — once fixed bars are known — only the page's content rows between
+        // them. Fixed bars and fades can keep the first from matching, or pull it to a look-alike
+        // shift of repetitive content; a big jump can leave too little overlap for the second.
+        var shift = Self.estimateShift(prev: reference, cur: features, predicted: lastShift)
+        let band = (headerBottom ?? 0)..<(footerTop ?? frameHeight)
+        if band.count >= frameHeight / 3, band.count < frameHeight,
+           let inBand = Self.estimateShift(prev: reference, cur: features, predicted: lastShift, ignoring: fixedMask, band: band), inBand != shift {
+            shift = shift.map { whole in
+                Self.better(whole, inBand, prev: reference, cur: features, ignoring: fixedMask, predicted: lastShift)
+            } ?? inBand
+        }
+        if shift == nil, headerBottom == nil || footerTop == nil {
+            // Bars not learned yet: rows at the edges that did not change at all are one (an opaque
+            // sticky bar or input box).
+            let edges = RowFeatures.unchangedEdges(prev: reference, cur: features)
+            let still = edges.top..<(frameHeight - edges.bottom)
+            if still.count >= frameHeight / 3, still.count < frameHeight {
+                shift = Self.estimateShift(prev: reference, cur: features, predicted: lastShift, ignoring: fixedMask, band: still)
             }
         }
         guard let dy = shift else { return .mismatch }
@@ -216,18 +282,30 @@ public final class ScrollStitcher {
         addFixed(RowFeatures.fixedRegions(prev: reference, cur: features, dy: dy, still: still))
 
         let newPos = position + dy
-        uncover(with: frame, at: newPos)
-        if newPos + frameHeight > bottom {
-            let rows = (bottom - newPos)..<frameHeight
-            if let strip = Self.copy(frame, rows: rows) { strips.append((bottom, strip)) }
-            markCovered(rows: rows, at: newPos)
-            bottom = newPos + frameHeight
+        let contentEnd = pageContentEnd(prev: reference, cur: features, dy: dy)
+        let contentStart = min(pageContentStart(prev: reference, cur: features, dy: dy), contentEnd)
+        // What the frame that last extended the image showed beyond these edges was a footer or
+        // header, not the page: the next strip replaces it.
+        bottom = min(bottom, end - frameHeight + contentEnd)
+        top = max(top, start + contentStart)
+        uncover(with: frame, at: newPos, rows: contentStart..<contentEnd)
+        if newPos + contentEnd > bottom {
+            // New page rows, plus this frame's footer as a provisional end of the image.
+            let first = max(0, bottom - newPos)
+            if let strip = Self.copy(frame, rows: first..<frameHeight) { pieces.append((0, newPos + first, strip)) }
+            markCovered(rows: first..<contentEnd, at: newPos)
+            appendedAt.append(newPos)
+            bottom = newPos + contentEnd
+            end = newPos + frameHeight
         }
-        if newPos < top {
-            let rows = 0..<(top - newPos)
-            if let strip = Self.copy(frame, rows: rows) { strips.append((newPos, strip)) }
-            markCovered(rows: rows, at: newPos)
-            top = newPos
+        if newPos + contentStart < top {
+            // New page rows above, plus this frame's header as a provisional start of the image.
+            let last = min(frameHeight, top - newPos)
+            if let strip = Self.copy(frame, rows: 0..<last) { pieces.append((0, newPos, strip)) }
+            markCovered(rows: contentStart..<last, at: newPos)
+            prependedAt.append(newPos)
+            top = newPos + contentStart
+            start = newPos
         }
         position = newPos
         self.reference = features
@@ -258,6 +336,45 @@ public final class ScrollStitcher {
         return true
     }
 
+    /// Where the page content of `cur` ends: above the highest row in the lower half that did not
+    /// scroll with the page. Fades show this only where text passes through them, so the edge
+    /// only ever moves up, and rows the shift scrolled in from below (which cannot be checked)
+    /// stay behind a footer seen before.
+    private func pageContentEnd(prev: RowFeatures, cur: RowFeatures, dy: Int) -> Int {
+        let h = frameHeight
+        let checkable = dy >= 0 ? (h / 2)..<max(h / 2, h - dy) : max(h / 2, -dy)..<h
+        if let y = checkable.first(where: { RowFeatures.rowIsFixed($0, prev: prev, cur: cur, dy: dy) }),
+           y - (headerBottom ?? 0) >= h / 3 {
+            // Plus a margin: the faint end of a fade dims text too little to detect, yet visibly.
+            let edge = min(footerTop ?? h, max(y - Self.edgeMargin(h), h / 2))
+            markFade(rows: edge..<(footerTop ?? h), at: appendedAt)
+            footerTop = edge
+        }
+        return footerTop ?? h
+    }
+
+    static func edgeMargin(_ h: Int) -> Int { max(4, h / 20) }
+
+    /// Rows of earlier frames (at `positions`) that turned out to be part of a fixed bar or fade.
+    private func markFade(rows: Range<Int>, at positions: [Int]) {
+        guard !rows.isEmpty else { return }
+        for p in positions { covered.append(CGRect(x: 0, y: p + rows.lowerBound, width: width, height: rows.count)) }
+    }
+
+    /// Where the page content of `cur` starts: below the lowest row in the upper half that did
+    /// not scroll with the page; like the footer edge, it only ever moves down.
+    private func pageContentStart(prev: RowFeatures, cur: RowFeatures, dy: Int) -> Int {
+        let h = frameHeight
+        let checkable = dy >= 0 ? 0..<min(h / 2, h - dy) : min(h / 2, -dy)..<(h / 2)
+        if let y = checkable.reversed().first(where: { RowFeatures.rowIsFixed($0, prev: prev, cur: cur, dy: dy) }),
+           (footerTop ?? h) - (y + 1) >= h / 3 {
+            let edge = max(headerBottom ?? 0, min(y + 1 + Self.edgeMargin(h), h / 2))
+            markFade(rows: (headerBottom ?? 0)..<edge, at: prependedAt)
+            headerBottom = edge
+        }
+        return headerBottom ?? 0
+    }
+
     /// Rows of a frame at `pos` just added to the image: where they show a fixed region, the page is hidden.
     private func markCovered(rows: Range<Int>, at pos: Int) {
         let band = CGRect(x: 0, y: rows.lowerBound, width: width, height: rows.count)
@@ -267,14 +384,14 @@ public final class ScrollStitcher {
         }
     }
 
-    /// Replaces covered areas that this frame, at `pos`, shows free of fixed regions.
-    private func uncover(with frame: CGImage, at pos: Int) {
+    /// Replaces covered areas that this frame, at `pos`, shows free of fixed regions within its page `rows`.
+    private func uncover(with frame: CGImage, at pos: Int, rows: Range<Int>) {
         covered.removeAll { area in
             let inFrame = area.offsetBy(dx: 0, dy: CGFloat(-pos))
-            guard inFrame.minY >= 0, inFrame.maxY <= CGFloat(frameHeight),
+            guard inFrame.minY >= CGFloat(rows.lowerBound), inFrame.maxY <= CGFloat(rows.upperBound),
                   !fixed.contains(where: { $0.intersects(inFrame) }),
                   let crop = frame.cropping(to: inFrame), let image = Self.copy(crop, rows: 0..<crop.height) else { return false }
-            patches.append((area, image))
+            pieces.append((Int(area.minX), Int(area.minY), image))
             return true
         }
     }
@@ -285,18 +402,20 @@ public final class ScrollStitcher {
     /// low-contrast changes such as hover highlights do not affect. Repetitive content (table
     /// rows, list items) can line up equally well at several shifts; the one closest to
     /// `predicted`, the previous frame's shift, wins such ties, since scrolling is continuous.
-    static func estimateShift(prev: RowFeatures, cur: RowFeatures, predicted: Int = 0, ignoring mask: [Bool]? = nil) -> Int? {
+    static func estimateShift(prev: RowFeatures, cur: RowFeatures, predicted: Int = 0, ignoring mask: [Bool]? = nil,
+                              band: Range<Int>? = nil) -> Int? {
         let h = min(prev.height, cur.height)
-        let maxShift = Int(Double(h) * 0.8)
-        let minOverlap = max(h / 5, 4)
-        guard let zero = RowFeatures.difference(prev: prev, cur: cur, dy: 0, step: 1, minOverlap: minOverlap) else { return nil }
+        let span = band?.count ?? h
+        let maxShift = Int(Double(span) * 0.8)
+        let minOverlap = max(span / 5, 4)
+        guard let zero = RowFeatures.difference(prev: prev, cur: cur, dy: 0, step: 1, minOverlap: minOverlap, band: band) else { return nil }
         // Nothing lines up differently: not scrolled (at most a hover effect or animation).
         if zero.mean < 0.5 || zero.outliers < Self.stillOutliers { return 0 }
 
         var coarse: [(dy: Int, diff: RowFeatures.Difference)] = []
         var dy = -maxShift
         while dy <= maxShift {
-            if let d = RowFeatures.difference(prev: prev, cur: cur, dy: dy, step: 4, minOverlap: minOverlap, ignoring: mask) {
+            if let d = RowFeatures.difference(prev: prev, cur: cur, dy: dy, step: 4, minOverlap: minOverlap, ignoring: mask, band: band) {
                 coarse.append((dy, d))
             }
             dy += 4
@@ -313,7 +432,7 @@ public final class ScrollStitcher {
         let refined = minima.compactMap { i -> (dy: Int, diff: RowFeatures.Difference)? in
             var best: (dy: Int, diff: RowFeatures.Difference)?
             for d in (coarse[i].dy - 4)...(coarse[i].dy + 4) where abs(d) <= maxShift {
-                if let diff = RowFeatures.difference(prev: prev, cur: cur, dy: d, step: 1, minOverlap: minOverlap, ignoring: mask),
+                if let diff = RowFeatures.difference(prev: prev, cur: cur, dy: d, step: 1, minOverlap: minOverlap, ignoring: mask, band: band),
                    best == nil || diff.mean < best!.diff.mean {
                     best = (d, diff)
                 }
@@ -323,9 +442,25 @@ public final class ScrollStitcher {
         guard let fewest = refined.map(\.diff.outliers).min() else { return nil }
         let ties = refined.filter { $0.diff.outliers <= fewest + Self.tieOutliers }
         guard let chosen = ties.min(by: { abs($0.dy - predicted) < abs($1.dy - predicted) }) else { return nil }
-        // Content lines up (a hover effect may remain), or a close match overall.
-        guard chosen.diff.outliers < Self.matchOutliers || chosen.diff.mean < 4 else { return nil }
+        // Content lines up (a hover effect may remain), or a close match overall, or clearly the
+        // best explanation when fades or fixed bars keep any shift from lining up perfectly:
+        // far better than not scrolling and than every other shift.
+        let others = refined.filter { abs($0.dy - chosen.dy) > 8 }.map(\.diff.outliers)
+        let clearlyBest = chosen.diff.outliers < zero.outliers * 0.5 && others.allSatisfy { chosen.diff.outliers * 2 < $0 }
+        guard chosen.diff.outliers < Self.matchOutliers || chosen.diff.mean < 4 || clearlyBest else { return nil }
         return chosen.dy
+    }
+
+    /// The better of two shifts, judged on the whole frame without known fixed regions; near-ties
+    /// go to the one closer to `predicted`.
+    static func better(_ a: Int, _ b: Int, prev: RowFeatures, cur: RowFeatures, ignoring mask: [Bool]?, predicted: Int) -> Int {
+        let h = min(prev.height, cur.height)
+        func outliers(_ dy: Int) -> Float {
+            RowFeatures.difference(prev: prev, cur: cur, dy: dy, step: 1, minOverlap: max(h / 5, 4), ignoring: mask)?.outliers ?? .infinity
+        }
+        let oa = outliers(a), ob = outliers(b)
+        if abs(oa - ob) <= tieOutliers { return abs(a - predicted) <= abs(b - predicted) ? a : b }
+        return oa < ob ? a : b
     }
 
     /// Outlier shares: below `stillOutliers` at zero shift means not scrolled; candidates within
@@ -338,20 +473,13 @@ public final class ScrollStitcher {
         guard height > 0, width > 0 else { return nil }
         let w = max(Int(CGFloat(width) * scale), 1), h = max(Int(CGFloat(height) * scale), 1)
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: strips.first?.image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  space: pieces.first?.image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         ctx.interpolationQuality = scale == 1 ? .none : .medium
-        for strip in strips {
-            let y = CGFloat(strip.y - top) * scale
-            let sh = CGFloat(strip.image.height) * scale
-            ctx.draw(strip.image, in: CGRect(x: 0, y: CGFloat(h) - y - sh, width: CGFloat(w), height: sh))
-        }
-        // The page where fixed regions covered it.
-        for patch in patches {
-            let r = patch.rect
-            let y = (r.minY - CGFloat(top)) * scale
-            ctx.draw(patch.image, in: CGRect(x: r.minX * scale, y: CGFloat(h) - y - r.height * scale,
-                                             width: r.width * scale, height: r.height * scale))
+        for piece in pieces {
+            let y = CGFloat(piece.y - start) * scale
+            let pw = CGFloat(piece.image.width) * scale, ph = CGFloat(piece.image.height) * scale
+            ctx.draw(piece.image, in: CGRect(x: CGFloat(piece.x) * scale, y: CGFloat(h) - y - ph, width: pw, height: ph))
         }
         return ctx.makeImage()
     }

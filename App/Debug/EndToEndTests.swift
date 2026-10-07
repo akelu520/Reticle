@@ -691,38 +691,12 @@ enum EndToEndTests {
         if let shot, let saveDir { try? ImageEncoder.png(shot)?.write(to: saveDir.appendingPathComponent("real-screenshot.png")) }
         helper?.terminate()
 
-        // 2. Scroll capture while the helper scrolls (manual scrolling stand-in).
-        helper = launchHelper(delay: 3.5, seconds: 7)
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
-        guard let v2 = await startSession(.screenshot) else { helper?.terminate(); return }
-        press(v2, title: "滚动截图")
+        // 2. Scroll capture while the helper scrolls (manual scrolling stand-in): a plain page, then a
+        // dark chat-like page with fixed bars and fades, scrolled down and up.
         let region = local.insetBy(dx: 20, dy: 20)
-        drag(v2, from: region.origin, to: CGPoint(x: region.maxX, y: region.maxY))
-        press(v2, title: "开始滚动截图")
-        let panel = await waitFor { NSApp.windows.compactMap { $0 as? ScrollControlPanel }.first { $0.isVisible } }
-        check("真实滚动截图：开始采集", panel != nil)
-
-        var statuses = Set<String>()
-        let until = Date().addingTimeInterval(11)
-        while Date() < until, let panel {
-            statuses.formUnion(descendants(of: panel.contentView!, NSTextField.self).map(\.stringValue).filter { !$0.isEmpty })
-            try? await Task.sleep(nanoseconds: 200_000_000)
+        for mode in ["page", "chat", "chat-up"] {
+            await realScrollCapture(mode: mode, region: region, scale: screen.backingScaleFactor, saveDir: saveDir)
         }
-        notes.append("滚动截图状态：\(statuses.sorted().suffix(4).joined(separator: " / "))")
-        if let panel { press(panel.contentView!, title: "完成") }
-        let long = await waitFor(timeout: 10) { NSApp.windows.compactMap { $0 as? LongImageWindow }.first { $0.isVisible } }
-        check("真实滚动截图：完成后打开长图窗口", long != nil)
-        if let long, let content = long.contentView {
-            press(content, tip: "保存到剪贴板")
-            let image = pasteboardImage()
-            let regionPx = CoordinateSpace.pixelRect(fromPoints: region, scale: screen.backingScaleFactor)
-            // 7 s at ~180 pt/s ≈ 1260 pt ≈ 2520 px of new content on a 2× screen.
-            check("真实滚动截图：长图明显长于选区", (image?.height ?? 0) > Int(regionPx.height) + 1500,
-                  "长图 \(image?.height ?? 0) px，选区 \(Int(regionPx.height)) px")
-            check("真实滚动截图：宽度 = 选区宽度", image?.width == Int(regionPx.width))
-            if let image, let saveDir { try? ImageEncoder.png(image)?.write(to: saveDir.appendingPathComponent("real-scroll.png")) }
-        }
-        helper?.terminate()
 
         // 3. Record ~3 s of the scrolling helper.
         helper = launchHelper(delay: 0.5, seconds: 8)
@@ -755,6 +729,52 @@ enum EndToEndTests {
         helper?.terminate()
     }
 
+    /// One scroll capture of the helper page in `mode` ("page", "chat", "chat-up"), saved as
+    /// real-scroll[-mode].png for scripts/e2e-verify-scroll.swift.
+    private static func realScrollCapture(mode: String, region: CGRect, scale: CGFloat, saveDir: URL?) async {
+        let label = mode == "page" ? "真实滚动截图" : mode == "chat" ? "深色聊天页向下滚动" : "深色聊天页向上滚动"
+        let helper = launchHelper(delay: 3.5, seconds: 7, mode: mode)
+        defer { helper?.terminate() }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // The mode bar shows on the display with the pointer; synthetic events do not move it.
+        if let primary = NSScreen.screens.first {
+            CGWarpMouseCursorPosition(CGPoint(x: helperFrame.midX, y: primary.frame.height - helperFrame.midY))
+            // Let the new pointer position reach NSEvent.mouseLocation before the session opens.
+            _ = await waitUntil(timeout: 2) { primary.frame.contains(NSEvent.mouseLocation) }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        guard let v = await startSession(.screenshot) else { return }
+        check("\(label)：遮罩上有模式栏", visibleMode(in: v, "滚动截图") != nil,
+              "screen=\(v.window?.screen?.localizedName ?? "?") overlays=\(NSApp.windows.compactMap { $0 as? OverlayWindow }.filter(\.isVisible).map { $0.screen?.localizedName ?? "?" }) modes=\(descendants(of: v, ModeButton.self).map { "\($0.title):\($0.isHiddenOrHasHiddenAncestor)" }) windows=\(windowSummary())")
+        press(v, title: "滚动截图")
+        drag(v, from: region.origin, to: CGPoint(x: region.maxX, y: region.maxY))
+        press(v, title: "开始滚动截图")
+        let panel = await waitFor { NSApp.windows.compactMap { $0 as? ScrollControlPanel }.first { $0.isVisible } }
+        check("\(label)：开始采集", panel != nil)
+
+        var statuses = Set<String>()
+        let until = Date().addingTimeInterval(11)
+        while Date() < until, let panel {
+            statuses.formUnion(descendants(of: panel.contentView!, NSTextField.self).map(\.stringValue).filter { !$0.isEmpty })
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        notes.append("\(label)状态：\(statuses.sorted().suffix(4).joined(separator: " / "))")
+        if let panel { press(panel.contentView!, title: "完成") }
+        let long = await waitFor(timeout: 10) { NSApp.windows.compactMap { $0 as? LongImageWindow }.first { $0.isVisible } }
+        check("\(label)：完成后打开长图窗口", long != nil)
+        if let long, let content = long.contentView {
+            press(content, tip: "保存到剪贴板")
+            let image = pasteboardImage()
+            let regionPx = CoordinateSpace.pixelRect(fromPoints: region, scale: scale)
+            // 7 s at ~180 pt/s ≈ 1260 pt ≈ 2520 px of new content on a 2× screen.
+            check("\(label)：长图明显长于选区", (image?.height ?? 0) > Int(regionPx.height) + 1500,
+                  "长图 \(image?.height ?? 0) px，选区 \(Int(regionPx.height)) px")
+            check("\(label)：宽度 = 选区宽度", image?.width == Int(regionPx.width))
+            let name = mode == "page" ? "real-scroll.png" : "real-scroll-\(mode).png"
+            if let image, let saveDir { try? ImageEncoder.png(image)?.write(to: saveDir.appendingPathComponent(name)) }
+        }
+    }
+
     /// Reads a child's stdout until it exits (or the timeout passes).
     private static func readToEnd(_ pipe: Pipe, of process: Process, timeout: TimeInterval) async -> String {
         let data: Data = await withCheckedContinuation { continuation in
@@ -764,11 +784,11 @@ enum EndToEndTests {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func launchHelper(delay: Double, seconds: Double) -> Process? {
+    private static func launchHelper(delay: Double, seconds: Double, mode: String = "page") -> Process? {
         guard let path = ProcessInfo.processInfo.environment["RETICLE_E2E_HELPER"] else { return nil }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
-        p.arguments = ["\(helperFrame.minX)", "\(helperFrame.minY)", "\(helperFrame.width)", "\(helperFrame.height)", "\(delay)", "\(seconds)"]
+        p.arguments = ["\(helperFrame.minX)", "\(helperFrame.minY)", "\(helperFrame.width)", "\(helperFrame.height)", "\(delay)", "\(seconds)", mode]
         do { try p.run() } catch { return nil }
         return p
     }
@@ -784,8 +804,12 @@ enum EndToEndTests {
 
     // MARK: - Session helpers
 
+    /// The visible overlay, preferring the primary display's (where the helper window and the
+    /// mode bar are) when several displays each have one.
     private static func overlay() -> OverlayView? {
-        NSApp.windows.compactMap { $0 as? OverlayWindow }.first { $0.isVisible }?.contentView as? OverlayView
+        let visible = NSApp.windows.compactMap { $0 as? OverlayWindow }.filter(\.isVisible)
+        let primary = visible.first { $0.screen == NSScreen.screens.first } ?? visible.first
+        return primary?.contentView as? OverlayView
     }
 
     private static func startSession(_ mode: CaptureMode) async -> OverlayView? {
