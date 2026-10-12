@@ -391,6 +391,19 @@ enum EndToEndTests {
         key(v3, 53)
         _ = await waitUntil { overlay() == nil }
 
+        // A small label selected with a margin: the quick text detector misses it, the recognizer
+        // does not, so 提取文字 must stay available and read it (see scripts/e2e.sh).
+        guard let v6 = await startSession(.screenshot) else { return }
+        let b6 = v6.bounds
+        let label = CGRect(x: b6.width * 0.3 - 12, y: b6.height - 150 - 16 - 12, width: 66, height: 42)
+        drag(v6, from: label.origin, to: CGPoint(x: label.maxX, y: label.maxY))
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        check("小字选区：提取文字可用", visibleButton(in: v6, tip: "提取文字")?.isEnabled == true)
+        press(v6, tip: "提取文字")
+        check("小字选区：提取到文字", await waitUntil(timeout: 15) { panelText(v6)?.contains("回收站") == true }, panelText(v6) ?? panelStatus(v6) ?? "nil")
+        key(v6, 53)
+        _ = await waitUntil { overlay() == nil }
+
         // Live Text: select text right in the screenshot and copy it.
         guard let v4 = await startSession(.screenshot) else { return }
         drag(v4, from: textRegion.origin, to: CGPoint(x: textRegion.maxX, y: textRegion.maxY))

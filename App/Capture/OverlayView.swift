@@ -80,7 +80,10 @@ final class OverlayView: NSView {
     private var recognitionToken = 0
     /// Recognized text in the selection, selectable in place.
     private var liveText: LiveTextOverlay!
-    /// What the selection contains, for enabling 提取文字 / 识别二维码; nil until scanned.
+    /// The selection's text as recognized in the background, for 提取文字 and selecting text in
+    /// place; nil until recognized (or when recognition failed).
+    private var recognized: (selection: CGRect, lines: [RecognizedLine])?
+    /// What the selection contains, for enabling 识别二维码; nil until scanned.
     private var scanResult: ScanResult?
     private var scannedSelection: CGRect?
     private var pendingScan: DispatchWorkItem?
@@ -385,7 +388,7 @@ final class OverlayView: NSView {
         defer { DispatchQueue.main.async { [weak self] in self?.debugDumpLayout() } }
         #endif
         toolbar.update(.init(tool: editor.tool, canUndo: editor.canUndo, watermarkActive: editor.watermarkActive,
-                             hasText: scanResult?.hasText ?? true, hasQRCode: !(scanResult?.codes.isEmpty ?? true), canScrollCapture: editor.model.document.annotations.isEmpty))
+                             hasText: recognizedLines.map { !$0.isEmpty } ?? true, hasQRCode: !(scanResult?.codes.isEmpty ?? true), canScrollCapture: editor.model.document.annotations.isEmpty))
         if drag == nil { layoutPanels() }
     }
 
@@ -443,6 +446,7 @@ final class OverlayView: NSView {
         guard drag == nil, sel != scannedSelection, session.mode == .screenshot else { return }
         scannedSelection = sel
         scanResult = nil
+        recognized = nil
         liveText.clear()
         // Until the scan answers, 识别二维码 is unavailable.
         editorChanged()
@@ -450,13 +454,14 @@ final class OverlayView: NSView {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.window != nil, let image = self.selectionImage() else { return }
             Task { @MainActor [weak self] in
-                // Unknown stays optimistic for text, so a worker failure never hides 提取文字.
                 let result = (try? await WorkerClient.scan(image)) ?? ScanResult(hasText: true, codes: [])
                 // The session may have ended meanwhile; it detaches the view from its window.
                 guard let self, self.window != nil, self.scannedSelection == sel else { return }
                 self.scanResult = result
                 self.editorChanged()
-                if result.hasText { self.recognizeLiveText(in: image, for: sel) }
+                // Always the full recognizer: the quick detector in the scan misses small text, and
+                // 提取文字 follows what the recognizer finds.
+                self.recognizeLiveText(in: image, for: sel)
             }
         }
         pendingScan = work
@@ -466,15 +471,31 @@ final class OverlayView: NSView {
     /// Recognizes the selection's text in the background so it can be selected in place.
     private func recognizeLiveText(in image: CGImage, for sel: CGRect) {
         Task { @MainActor [weak self] in
-            let lines = (try? await WorkerClient.recognizeLines(in: image)) ?? []
+            // A failure leaves 提取文字 available; clicking it tries again.
+            guard let lines = try? await WorkerClient.recognizeLines(in: image) else { return }
             guard let self, self.window != nil, self.scannedSelection == sel, self.selection == sel else { return }
+            self.recognized = (sel, lines)
             self.liveText.set(LiveTextLayout(lines: lines), frame: sel)
+            self.editorChanged()
         }
+    }
+
+    /// Recognized lines for the current selection, once the background recognition has finished.
+    private var recognizedLines: [RecognizedLine]? {
+        guard let recognized, recognized.selection == selection else { return nil }
+        return recognized.lines
     }
 
     private func startRecognition(translate: Bool = false) {
         guard let image = selectionImage() else { return }
         let panel = openTextPanel(title: "提取文字")
+        if let lines = recognizedLines {
+            // Already recognized in the background: show it right away.
+            panel.show(text: ReadingOrder.text(from: lines))
+            layoutPanels()
+            if translate { panel.translateNow(to: Preferences.translationTarget) }
+            return
+        }
         panel.showLoading()
         layoutPanels()
         let token = recognitionToken
