@@ -694,7 +694,7 @@ enum EndToEndTests {
         // 2. Scroll capture while the helper scrolls (manual scrolling stand-in): a plain page, then a
         // dark chat-like page with fixed bars and fades, scrolled down and up.
         let region = local.insetBy(dx: 20, dy: 20)
-        for mode in ["page", "chat", "chat-up"] {
+        for mode in ["page", "line", "chat", "chat-up"] {
             await realScrollCapture(mode: mode, region: region, scale: screen.backingScaleFactor, saveDir: saveDir)
         }
 
@@ -732,7 +732,7 @@ enum EndToEndTests {
     /// One scroll capture of the helper page in `mode` ("page", "chat", "chat-up"), saved as
     /// real-scroll[-mode].png for scripts/e2e-verify-scroll.swift.
     private static func realScrollCapture(mode: String, region: CGRect, scale: CGFloat, saveDir: URL?) async {
-        let label = mode == "page" ? "真实滚动截图" : mode == "chat" ? "深色聊天页向下滚动" : "深色聊天页向上滚动"
+        let label = mode == "page" ? "真实滚动截图" : mode == "line" ? "底边固定细线页面" : mode == "chat" ? "深色聊天页向下滚动" : "深色聊天页向上滚动"
         let helper = launchHelper(delay: 3.5, seconds: 7, mode: mode)
         defer { helper?.terminate() }
         try? await Task.sleep(nanoseconds: 1_000_000_000)

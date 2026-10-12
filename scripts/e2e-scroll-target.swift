@@ -3,10 +3,12 @@
 // a web page. It is a separate program because Reticle excludes its own
 // windows from captures.
 //
-// Usage: e2e-scroll-target <x> <y> <width> <height> <delay seconds> <scroll seconds> [chat | chat-up]
+// Usage: e2e-scroll-target <x> <y> <width> <height> <delay seconds> <scroll seconds> [chat | chat-up | line]
 //
 // `chat` shows a dark chat-like page with a title bar and fade fixed at the top, an input box
 // and fade fixed at the bottom, and a floating button; `chat-up` scrolls it from the bottom up.
+// `line` is the plain page with a thin gray line fixed where the test's selection ends (like a
+// browser window's edge just inside the selection).
 import AppKit
 
 let mode = CommandLine.arguments.count > 7 ? CommandLine.arguments[7] : "page"
@@ -105,14 +107,20 @@ window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliar
 let scroll = NSScrollView(frame: CGRect(origin: .zero, size: frame.size))
 scroll.hasVerticalScroller = false
 let doc = FlippedImageView(frame: CGRect(x: 0, y: 0, width: frame.width, height: pageHeight))
-let pageImage = mode == "page" ? makePage(width: Int(frame.width * 2), height: Int(pageHeight * 2))
+let pageImage = mode == "page" || mode == "line" ? makePage(width: Int(frame.width * 2), height: Int(pageHeight * 2))
     : makeChatPage(width: Int(frame.width * 2), height: Int(pageHeight * 2))
 doc.image = NSImage(cgImage: pageImage, size: CGSize(width: frame.width, height: pageHeight))
 doc.imageScaling = .scaleAxesIndependently
 scroll.documentView = doc
 let root = NSView(frame: CGRect(origin: .zero, size: frame.size))
 root.addSubview(scroll)
-if mode != "page" {
+if mode == "line" {
+    // The E2E selection is inset 20 pt from the window; the line covers its bottom 1.5 pt.
+    let line = NSView(frame: CGRect(x: 0, y: 20, width: frame.width, height: 1.5))
+    line.wantsLayer = true
+    line.layer?.backgroundColor = NSColor(white: 0.8, alpha: 1).cgColor
+    root.addSubview(line)
+} else if mode != "page" {
     // Fixed to the window, like a chat app's title bar, input box and "scroll to bottom" button.
     let w = frame.width, h = frame.height
     let title = NSView(frame: CGRect(x: 0, y: h - 40, width: w, height: 40))

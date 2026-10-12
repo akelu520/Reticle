@@ -105,6 +105,12 @@ struct RowFeatures {
         return count
     }
 
+    /// Whether some row in `rows` clearly differs from row `other` of the same frame.
+    static func contrasts(_ f: RowFeatures, rows: Range<Int>, with other: Int) -> Bool {
+        guard other >= 0, other < f.height else { return false }
+        return rows.contains { differingSamples(f, $0, f, other) >= 2 }
+    }
+
     /// How many rows at the top and at the bottom are exactly the same in both frames.
     static func unchangedEdges(prev: RowFeatures, cur: RowFeatures) -> (top: Int, bottom: Int) {
         let h = min(prev.height, cur.height), n = blocks
@@ -215,6 +221,10 @@ public final class ScrollStitcher {
     /// found to reach further, those rows near it showed the fade, and are patched later.
     private var appendedAt: [Int] = []
     private var prependedAt: [Int] = []
+    /// Rows at the bottom / top edge that stayed identical over a run of scrolling, and how far the
+    /// page moved meanwhile.
+    private var stillBottom = (rows: 0, moved: 0)
+    private var stillTop = (rows: 0, moved: 0)
     /// Shift of the last frame that moved: scrolling is continuous, so the next shift is close to it.
     private var lastShift = 0
     /// Viewport regions (pixels, top-down) that stay put while the page scrolls: floating buttons,
@@ -246,6 +256,8 @@ public final class ScrollStitcher {
             headerBottom = nil
             appendedAt = [0]
             prependedAt = [0]
+            stillBottom = (0, 0)
+            stillTop = (0, 0)
             lastShift = 0
             return .started
         }
@@ -282,6 +294,7 @@ public final class ScrollStitcher {
         addFixed(RowFeatures.fixedRegions(prev: reference, cur: features, dy: dy, still: still))
 
         let newPos = position + dy
+        learnStillEdges(prev: reference, cur: features, dy: dy)
         let contentEnd = pageContentEnd(prev: reference, cur: features, dy: dy)
         let contentStart = min(pageContentStart(prev: reference, cur: features, dy: dy), contentEnd)
         // What the frame that last extended the image showed beyond these edges was a footer or
@@ -346,14 +359,54 @@ public final class ScrollStitcher {
         if let y = checkable.first(where: { RowFeatures.rowIsFixed($0, prev: prev, cur: cur, dy: dy) }),
            y - (headerBottom ?? 0) >= h / 3 {
             // Plus a margin: the faint end of a fade dims text too little to detect, yet visibly.
-            let edge = min(footerTop ?? h, max(y - Self.edgeMargin(h), h / 2))
-            markFade(rows: edge..<(footerTop ?? h), at: appendedAt)
-            footerTop = edge
+            moveFooterEdge(to: y - Self.edgeMargin(h))
         }
         return footerTop ?? h
     }
 
     static func edgeMargin(_ h: Int) -> Int { max(4, h / 20) }
+
+    /// The page content of a frame ends at `y` or above: the footer edge only moves up (never past
+    /// the middle), and rows taken below it before are patched.
+    private func moveFooterEdge(to y: Int) {
+        let h = frameHeight
+        let edge = min(footerTop ?? h, max(y, h / 2))
+        markFade(rows: edge..<(footerTop ?? h), at: appendedAt)
+        footerTop = edge
+    }
+
+    /// The page content of a frame starts at `y` or below; the header edge only moves down.
+    private func moveHeaderEdge(to y: Int) {
+        let h = frameHeight
+        let edge = max(headerBottom ?? 0, min(y, h / 2))
+        markFade(rows: (headerBottom ?? 0)..<edge, at: prependedAt)
+        headerBottom = edge
+    }
+
+    /// A thin line fixed along an edge (a window border, a 1–3 px fixed bar) lies entirely in the
+    /// rows that scrolled in this frame, so it cannot be checked against the page. Instead: rows at
+    /// the edge that stay identical while the page moves at least a quarter of the frame past them,
+    /// and that contrast with the page next to them (plain background only looks the same).
+    private func learnStillEdges(prev: RowFeatures, cur: RowFeatures, dy: Int) {
+        let h = frameHeight
+        let edges = RowFeatures.unchangedEdges(prev: prev, cur: cur)
+        func extend(_ run: inout (rows: Int, moved: Int), _ k: Int) -> Int? {
+            if k == 0 {
+                run = (0, 0)
+                return nil
+            }
+            // A tall unchanged band is plain background passing by: keep the run, learn nothing.
+            guard k < h / 4 else { return nil }
+            run = run.rows == 0 ? (k, abs(dy)) : (min(run.rows, k), run.moved + abs(dy))
+            return run.moved >= h / 4 ? run.rows : nil
+        }
+        if let k = extend(&stillBottom, edges.bottom), RowFeatures.contrasts(cur, rows: (h - k)..<h, with: h - k - 1) {
+            moveFooterEdge(to: h - k - 2)
+        }
+        if let k = extend(&stillTop, edges.top), RowFeatures.contrasts(cur, rows: 0..<k, with: k) {
+            moveHeaderEdge(to: k + 2)
+        }
+    }
 
     /// Rows of earlier frames (at `positions`) that turned out to be part of a fixed bar or fade.
     private func markFade(rows: Range<Int>, at positions: [Int]) {
@@ -368,9 +421,7 @@ public final class ScrollStitcher {
         let checkable = dy >= 0 ? 0..<min(h / 2, h - dy) : min(h / 2, -dy)..<(h / 2)
         if let y = checkable.reversed().first(where: { RowFeatures.rowIsFixed($0, prev: prev, cur: cur, dy: dy) }),
            (footerTop ?? h) - (y + 1) >= h / 3 {
-            let edge = max(headerBottom ?? 0, min(y + 1 + Self.edgeMargin(h), h / 2))
-            markFade(rows: (headerBottom ?? 0)..<edge, at: prependedAt)
-            headerBottom = edge
+            moveHeaderEdge(to: y + 1 + Self.edgeMargin(h))
         }
         return headerBottom ?? 0
     }

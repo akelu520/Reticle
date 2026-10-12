@@ -83,7 +83,7 @@ guard args.count >= 3, let inset = Int(args[2]),
 }
 let mode = args.count > 3 ? args[3] : "page"
 let s = gray(image)
-let page = gray(mode == "page" ? makePage(width: 1040, height: 8000) : makeChatPage(width: 1040, height: 8000))
+let page = gray(mode == "page" || mode == "line" ? makePage(width: 1040, height: 8000) : makeChatPage(width: 1040, height: 8000))
 let window = 60
 
 func windowDiff(_ y: Int, pageY: Int) -> Double {
@@ -99,7 +99,8 @@ func windowDiff(_ y: Int, pageY: Int) -> Double {
 // The plain page starts at the top of the page; a chat capture shows the fixed title bar and
 // fade of one screen at its top and the input box, fade and button of another at its bottom,
 // and (scrolling up) ends wherever the scrolling stopped: find where it sits on the page.
-let skipTop = mode == "page" ? 0 : 160, skipBottom = mode == "page" ? 0 : 340
+let skipTop = mode == "page" || mode == "line" ? 0 : 160
+let skipBottom = mode == "page" ? 0 : mode == "line" ? 12 : 340
 var offset = inset
 if mode != "page" {
     var best = (offset: 0, d: Double.infinity)
@@ -114,6 +115,6 @@ for y in stride(from: skipTop, to: s.h - skipBottom - window, by: 50) {
     worst = max(worst, windowDiff(y, pageY: y + offset))
 }
 let ok = worst < 1.0 && s.h - skipBottom - skipTop > 1000
-let label = mode == "page" ? "真实滚动截图" : mode == "chat" ? "深色聊天页向下滚动截图" : "深色聊天页向上滚动截图"
+let label = mode == "page" ? "真实滚动截图" : mode == "line" ? "底边固定细线页面滚动截图" : mode == "chat" ? "深色聊天页向下滚动截图" : "深色聊天页向上滚动截图"
 print("\(ok ? "✓" : "✗") \(label)逐行校验：\(s.w)×\(s.h)，最差窗口平均灰度差 \(String(format: "%.2f", worst))（< 1.0 为无断层）")
 exit(ok ? 0 : 1)
