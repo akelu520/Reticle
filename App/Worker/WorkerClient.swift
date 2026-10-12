@@ -40,14 +40,23 @@ enum WorkerClient {
     }
 
     private static func recognize(_ image: CGImage) async throws -> WorkerProtocol.OCRResponse {
-        let response = try await imageCommand(.ocr, image, as: WorkerProtocol.OCRResponse.self)
+        let response = try await retryingOnce { try await imageCommand(.ocr, image, as: WorkerProtocol.OCRResponse.self) }
         if let error = response.error { throw NSError(domain: "ReticleWorker", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }
         return response
     }
 
     /// Whether `image` contains text, and any QR code payloads.
     static func scan(_ image: CGImage) async throws -> ScanResult {
-        try await imageCommand(.scan, image, as: ScanResult.self)
+        try await retryingOnce { try await imageCommand(.scan, image, as: ScanResult.self) }
+    }
+
+    /// A worker that exits abnormally or answers garbage gets one more chance (a fresh process).
+    private static func retryingOnce<T>(_ work: () async throws -> T) async throws -> T {
+        do {
+            return try await work()
+        } catch Failure.crashed, Failure.badResponse {
+            return try await work()
+        }
     }
 
     /// Hands `image` to the worker as a temporary PNG and decodes its last stdout line.

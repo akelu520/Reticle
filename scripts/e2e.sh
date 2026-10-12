@@ -28,6 +28,8 @@ NSColor.systemRed.setFill(); NSRect(x: 0, y: size.height - 150, width: 300, heig
 let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 60), .foregroundColor: NSColor.black]
 ("TOP LEFT" as NSString).draw(at: NSPoint(x: 325, y: size.height - 100), withAttributes: attrs)
 ("Reticle demo" as NSString).draw(at: NSPoint(x: size.width * 0.3, y: size.height / 2), withAttributes: attrs)
+// A small label the quick text detector misses when selected with a margin (see 提取文字 tests).
+("回收站" as NSString).draw(at: NSPoint(x: size.width * 0.3, y: 150), withAttributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.black])
 // A QR code in the lower right, for 识别二维码.
 let qr = CIFilter(name: "CIQRCodeGenerator")!
 qr.setValue(Data("https://github.com/akelu520/Reticle".utf8), forKey: "inputMessage")
