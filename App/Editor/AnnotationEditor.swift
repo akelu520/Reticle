@@ -47,7 +47,9 @@ final class AnnotationEditor {
         self.host = host
         self.baseImage = baseImage
         self.scale = scale
-        self.model = EditorModel(scale: scale)
+        let presets = Preferences.toolPresets
+        self.model = EditorModel(scale: scale, presets: presets)
+        self.savedPresets = model.toolPresets
         self.canvas = AnnotationCanvasView(baseSize: CGSize(width: baseImage.width, height: baseImage.height), scale: scale)
     }
 
@@ -59,7 +61,7 @@ final class AnnotationEditor {
     func reset() {
         closeWatermarkPanel()
         commitTextInput()
-        model = EditorModel(scale: scale)
+        model = EditorModel(scale: scale, presets: model.toolPresets)
         refresh()
     }
 
@@ -135,14 +137,18 @@ final class AnnotationEditor {
     }
 
     func pointerUp() {
-        model.pointerUp()
+        // A click on text with the text tool (no drag) edits it.
+        if case let .editText(id) = model.pointerUp(), let a = model.document.annotation(id) {
+            beginTextInput(kind: a.kind, origin: a.points.first ?? .zero, text: a.text, flipped: a.labelFlipped)
+        }
         refresh()
     }
 
     /// Cursor inside the editable area.
     func cursor(at p: CGPoint) -> NSCursor {
         switch model.tool {
-        case .text?: return .iBeam
+        // Existing text can be dragged with the text tool; elsewhere a click adds text.
+        case .text?: return model.document.hit(pixel(p), tolerance: 4 * scale)?.kind == .text ? .openHand : .iBeam
         case .some: return CaptureCursor.reticle
         case nil: return model.document.hit(pixel(p), tolerance: 4 * scale) != nil ? .pointingHand : .openHand
         }
@@ -262,7 +268,19 @@ final class AnnotationEditor {
 
     func refresh() {
         refreshCanvas()
+        rememberPresets()
         onChange?()
+    }
+
+    /// Tool options as last saved, so they are written only when they change.
+    private var savedPresets: [Tool: ToolPreset]
+
+    /// The next capture starts with the options set now (font size, style, color, …).
+    private func rememberPresets() {
+        let presets = model.toolPresets
+        guard presets != savedPresets else { return }
+        savedPresets = presets
+        Preferences.toolPresets = presets
     }
 
     private func refreshCanvas() {
