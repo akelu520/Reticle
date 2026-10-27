@@ -19,6 +19,8 @@ final class ScrollCaptureController: NSObject, SCStreamDelegate {
     private var frameWindow: NSWindow?
     private var controls: ScrollControlPanel?
     private var lastMove = Date()
+    /// The direction the page scrolls, once the stitcher is sure.
+    private var axis: ScrollAxis?
     private var finished = false
     #if !APPSTORE
     private var autoScroller: AutoScroller?
@@ -103,7 +105,8 @@ final class ScrollCaptureController: NSObject, SCStreamDelegate {
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.colorSpaceName = CGColorSpace.sRGB
 
-        let sink = ScrollFrameSink(previewWidth: ScrollControlPanel.previewWidth * 2) { [weak self] progress in
+        let previewSize = CGSize(width: ScrollControlPanel.previewWidth * 2, height: ScrollControlPanel.previewHeight * 2)
+        let sink = ScrollFrameSink(previewSize: previewSize) { [weak self] progress in
             DispatchQueue.main.async { self?.handle(progress) }
         }
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
@@ -121,12 +124,13 @@ final class ScrollCaptureController: NSObject, SCStreamDelegate {
     private func handle(_ p: ScrollFrameSink.Progress) {
         guard !finished else { return }
         if let preview = p.preview { controls?.setPreview(preview, scale: scale) }
+        if let a = p.axis { axis = a }
         switch p.update {
         case .started:
             lastMove = Date()
         case .moved:
             lastMove = Date()
-            controls?.setStatus("已拼接 \(p.height) 像素")
+            controls?.setStatus("已拼接 \(p.length) 像素")
         case .unchanged:
             break
         case .mismatch:
@@ -152,7 +156,8 @@ final class ScrollCaptureController: NSObject, SCStreamDelegate {
         let global = CoordinateSpace.appKitGlobal(fromLocalFlipped: rect, screenFrame: screen.frame)
         let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
         let center = CGPoint(x: global.midX, y: primaryHeight - global.midY)
-        let scroller = AutoScroller(point: center)
+        // Along the direction the user has been scrolling; down until that is known.
+        let scroller = AutoScroller(point: center, axis: axis ?? .vertical)
         autoScroller = scroller
         lastMove = Date()
         scroller.start()

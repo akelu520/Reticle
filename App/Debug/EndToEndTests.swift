@@ -707,7 +707,7 @@ enum EndToEndTests {
         // 2. Scroll capture while the helper scrolls (manual scrolling stand-in): a plain page, then a
         // dark chat-like page with fixed bars and fades, scrolled down and up.
         let region = local.insetBy(dx: 20, dy: 20)
-        for mode in ["page", "line", "chat", "chat-up"] {
+        for mode in ["page", "line", "chat", "chat-up", "wide"] {
             await realScrollCapture(mode: mode, region: region, scale: screen.backingScaleFactor, saveDir: saveDir)
         }
 
@@ -745,7 +745,8 @@ enum EndToEndTests {
     /// One scroll capture of the helper page in `mode` ("page", "chat", "chat-up"), saved as
     /// real-scroll[-mode].png for scripts/e2e-verify-scroll.swift.
     private static func realScrollCapture(mode: String, region: CGRect, scale: CGFloat, saveDir: URL?) async {
-        let label = mode == "page" ? "真实滚动截图" : mode == "line" ? "底边固定细线页面" : mode == "chat" ? "深色聊天页向下滚动" : "深色聊天页向上滚动"
+        let label = mode == "page" ? "真实滚动截图" : mode == "line" ? "底边固定细线页面" : mode == "chat" ? "深色聊天页向下滚动"
+            : mode == "chat-up" ? "深色聊天页向上滚动" : "横向滚动页面"
         let helper = launchHelper(delay: 3.5, seconds: 7, mode: mode)
         defer { helper?.terminate() }
         try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -780,9 +781,12 @@ enum EndToEndTests {
             let image = pasteboardImage()
             let regionPx = CoordinateSpace.pixelRect(fromPoints: region, scale: scale)
             // 7 s at ~180 pt/s ≈ 1260 pt ≈ 2520 px of new content on a 2× screen.
-            check("\(label)：长图明显长于选区", (image?.height ?? 0) > Int(regionPx.height) + 1500,
-                  "长图 \(image?.height ?? 0) px，选区 \(Int(regionPx.height)) px")
-            check("\(label)：宽度 = 选区宽度", image?.width == Int(regionPx.width))
+            let wide = mode == "wide"
+            let along = wide ? image?.width ?? 0 : image?.height ?? 0
+            check("\(label)：长图明显长于选区", along > Int(wide ? regionPx.width : regionPx.height) + 1500,
+                  "长图 \(along) px，选区 \(Int(wide ? regionPx.width : regionPx.height)) px")
+            check(wide ? "\(label)：高度 = 选区高度" : "\(label)：宽度 = 选区宽度",
+                  wide ? image?.height == Int(regionPx.height) : image?.width == Int(regionPx.width))
             let name = mode == "page" ? "real-scroll.png" : "real-scroll-\(mode).png"
             if let image, let saveDir { try? ImageEncoder.png(image)?.write(to: saveDir.appendingPathComponent(name)) }
         }

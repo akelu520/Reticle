@@ -10,7 +10,7 @@ final class ScrollControlPanel: NSPanel {
     }
 
     static let previewWidth: CGFloat = 120
-    private static let previewHeight: CGFloat = 260
+    static let previewHeight: CGFloat = 260
 
     private let actions: Actions
     private let preview = NSImageView()
