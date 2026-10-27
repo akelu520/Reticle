@@ -3,12 +3,13 @@
 // a web page. It is a separate program because Reticle excludes its own
 // windows from captures.
 //
-// Usage: e2e-scroll-target <x> <y> <width> <height> <delay seconds> <scroll seconds> [chat | chat-up | line]
+// Usage: e2e-scroll-target <x> <y> <width> <height> <delay seconds> <scroll seconds> [chat | chat-up | line | wide]
 //
 // `chat` shows a dark chat-like page with a title bar and fade fixed at the top, an input box
 // and fade fixed at the bottom, and a floating button; `chat-up` scrolls it from the bottom up.
 // `line` is the plain page with a thin gray line fixed where the test's selection ends (like a
-// browser window's edge just inside the selection).
+// browser window's edge just inside the selection). `wide` is a page 4000 pt wide that scrolls
+// to the right.
 import AppKit
 
 let mode = CommandLine.arguments.count > 7 ? CommandLine.arguments[7] : "page"
@@ -106,10 +107,12 @@ window.level = .floating
 window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
 let scroll = NSScrollView(frame: CGRect(origin: .zero, size: frame.size))
 scroll.hasVerticalScroller = false
-let doc = FlippedImageView(frame: CGRect(x: 0, y: 0, width: frame.width, height: pageHeight))
-let pageImage = mode == "page" || mode == "line" ? makePage(width: Int(frame.width * 2), height: Int(pageHeight * 2))
+let wide = mode == "wide"
+let docSize = wide ? CGSize(width: pageHeight, height: frame.height) : CGSize(width: frame.width, height: pageHeight)
+let doc = FlippedImageView(frame: CGRect(origin: .zero, size: docSize))
+let pageImage = mode == "page" || mode == "line" || wide ? makePage(width: Int(docSize.width * 2), height: Int(docSize.height * 2))
     : makeChatPage(width: Int(frame.width * 2), height: Int(pageHeight * 2))
-doc.image = NSImage(cgImage: pageImage, size: CGSize(width: frame.width, height: pageHeight))
+doc.image = NSImage(cgImage: pageImage, size: docSize)
 doc.imageScaling = .scaleAxesIndependently
 scroll.documentView = doc
 let root = NSView(frame: CGRect(origin: .zero, size: frame.size))
@@ -120,7 +123,7 @@ if mode == "line" {
     line.wantsLayer = true
     line.layer?.backgroundColor = NSColor(white: 0.8, alpha: 1).cgColor
     root.addSubview(line)
-} else if mode != "page" {
+} else if mode == "chat" || mode == "chat-up" {
     // Fixed to the window, like a chat app's title bar, input box and "scroll to bottom" button.
     let w = frame.width, h = frame.height
     let title = NSView(frame: CGRect(x: 0, y: h - 40, width: w, height: 40))
@@ -160,8 +163,12 @@ let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { _ in
     let t = Date().timeIntervalSince(start)
     guard t > delay, t < delay + seconds else { return }
     let clip = scroll.contentView
-    let step: CGFloat = mode == "chat-up" ? -6 : 6
-    clip.scroll(to: CGPoint(x: 0, y: min(max(clip.bounds.minY + step, 0), pageHeight - frame.height)))
+    if wide {
+        clip.scroll(to: CGPoint(x: min(clip.bounds.minX + 6, pageHeight - frame.width), y: 0))
+    } else {
+        let step: CGFloat = mode == "chat-up" ? -6 : 6
+        clip.scroll(to: CGPoint(x: 0, y: min(max(clip.bounds.minY + step, 0), pageHeight - frame.height)))
+    }
     scroll.reflectScrolledClipView(clip)
 }
 RunLoop.main.add(timer, forMode: .common)

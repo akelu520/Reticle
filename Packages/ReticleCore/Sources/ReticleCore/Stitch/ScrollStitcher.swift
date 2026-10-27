@@ -333,9 +333,11 @@ public final class ScrollStitcher {
     private func addFixed(_ regions: [CGRect]) -> Bool {
         let new = regions.filter { r in !fixed.contains { $0.contains(r) } }
         guard !new.isEmpty else { return false }
+        // It covered the page in every frame taken so far, not just the last one.
+        let earlier = Set(appendedAt + prependedAt + [position])
         for r in new {
             fixed.append(r)
-            covered.append(r.offsetBy(dx: 0, dy: CGFloat(position)))
+            for p in earlier { covered.append(r.offsetBy(dx: 0, dy: CGFloat(p))) }
         }
         let b = RowFeatures.blocks
         var mask = [Bool](repeating: false, count: frameHeight * b)

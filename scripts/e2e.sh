@@ -62,7 +62,7 @@ if grep -qE '^== 结果：([0-9]+)/\1 通过' "$LOG"; then status=0; else status
 if [ -f "$OUT/saves/real-scroll.png" ]; then
   swift scripts/e2e-verify-scroll.swift "$OUT/saves/real-scroll.png" 40 || status=$((status + 1))
 fi
-for mode in line chat chat-up; do
+for mode in line chat chat-up wide; do
   if [ -f "$OUT/saves/real-scroll-$mode.png" ]; then
     swift scripts/e2e-verify-scroll.swift "$OUT/saves/real-scroll-$mode.png" 40 "$mode" || status=$((status + 1))
   fi

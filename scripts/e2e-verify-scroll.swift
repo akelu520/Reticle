@@ -82,6 +82,25 @@ guard args.count >= 3, let inset = Int(args[2]),
     exit(2)
 }
 let mode = args.count > 3 ? args[3] : "page"
+if mode == "wide" {
+    // Sideways: the page is 8000 × 1120 px; the selection starts `inset` px into it on both axes.
+    let s = gray(image)
+    let page = gray(makePage(width: 8000, height: 1120))
+    let window = 60
+    var worst = 0.0
+    for x in stride(from: 0, to: s.w - window, by: 50) {
+        var d = 0
+        for dx in stride(from: 0, to: window, by: 2) {
+            for y in stride(from: 0, to: s.h, by: 4) {
+                d += abs(Int(s.p[y * s.w + x + dx]) - Int(page.p[(y + inset) * page.w + x + inset + dx]))
+            }
+        }
+        worst = max(worst, Double(d) / Double((window / 2) * (s.h / 4)))
+    }
+    let ok = worst < 1.0 && s.w > 2000
+    print("\(ok ? "✓" : "✗") 横向滚动截图逐列校验：\(s.w)×\(s.h)，最差窗口平均灰度差 \(String(format: "%.2f", worst))（< 1.0 为无断层）")
+    exit(ok ? 0 : 1)
+}
 let s = gray(image)
 let page = gray(mode == "page" || mode == "line" ? makePage(width: 1040, height: 8000) : makeChatPage(width: 1040, height: 8000))
 let window = 60
