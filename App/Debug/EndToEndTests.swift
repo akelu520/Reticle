@@ -16,6 +16,9 @@ enum EndToEndTests {
         // Line-buffered so progress is visible while the suite runs.
         setvbuf(stdout, nil, _IOLBF, 0)
         let backup = PasteboardBackup()
+        // Tests set fonts and colors; the user's remembered tool options come back afterwards.
+        let userPresets = Preferences.toolPresetsData
+        defer { Preferences.toolPresetsData = userPresets }
         let memoryAtStart = footprintMB()
         let sections: [(String, () async -> Void)] = [
             ("截图：遮罩、窗口识别、选区", testSelection),
@@ -34,6 +37,8 @@ enum EndToEndTests {
         let only = ProcessInfo.processInfo.environment["RETICLE_E2E_ONLY"].map { Set($0.split(separator: ",").compactMap { Int($0) }) }
         for (index, (title, test)) in sections.enumerated() where only?.contains(index) ?? true {
             print("\n== \(title)")
+            // Each section starts from the default tool options.
+            Preferences.toolPresetsData = nil
             await test()
             await endSessionIfNeeded()
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -194,6 +199,23 @@ enum EndToEndTests {
               "\(String(describing: annotations().last?.style))")
         check("文本：Esc 结束输入后截图仍在", overlay() != nil)
 
+        // With the text tool still active, existing text can be dragged anywhere; a click edits it.
+        let typed = annotations().last!
+        let grab = CGPoint(x: typed.bounds.midX / scale, y: typed.bounds.midY / scale)
+        check("文本工具下悬停已有文字显示可拖动光标", editor.cursor(at: grab) == .openHand)
+        drag(v, from: grab, to: CGPoint(x: grab.x + 60, y: grab.y + 25))
+        let moved = annotations().first { $0.id == typed.id }
+        check("文本工具下拖动已有文字到任意位置", moved.map { abs($0.bounds.minX - typed.bounds.minX - 60 * scale) < 1 && abs($0.bounds.minY - typed.bounds.minY - 25 * scale) < 1 } == true
+              && annotations().filter { $0.kind == .text }.count == 1,
+              "\(String(describing: moved?.bounds)) vs \(typed.bounds)")
+        check("拖动文字后不进入编辑", !(v.window?.firstResponder is NSTextView))
+        let movedBox = moved?.bounds ?? typed.bounds
+        click(v, CGPoint(x: movedBox.midX / scale, y: movedBox.midY / scale))
+        let reopened = v.window?.firstResponder as? NSTextView
+        check("文本工具下单击已有文字进入编辑", reopened?.string == "Hello中文", reopened?.string ?? "nil")
+        key(v, 53)
+        check("单击编辑后文字仍在新位置", annotations().first { $0.kind == .text }.map { abs($0.bounds.minX - movedBox.minX) < 1 } == true)
+
         press(v, tip: "标签")
         let labelAt = p(0.5, 0.65)
         click(v, labelAt)
@@ -247,6 +269,24 @@ enum EndToEndTests {
         check("剪切板图片尺寸 = 选区像素", copied.map { CGSize(width: $0.width, height: $0.height) } == expectedPx.size,
               "\(String(describing: copied.map { ($0.width, $0.height) })) vs \(expectedPx.size)")
         check("导出图包含标注（与原图不同）", copied.flatMap(ImageEncoder.png) != plain.flatMap(ImageEncoder.png))
+
+        // The next capture starts with the text options set above (20pt, background style).
+        guard let next = await startSession(.screenshot) else { return }
+        let nb = next.bounds
+        drag(next, from: CGPoint(x: nb.width * 0.2, y: nb.height * 0.2), to: CGPoint(x: nb.width * 0.6, y: nb.height * 0.6))
+        press(next, tip: "文本")
+        next.window?.contentView?.layoutSubtreeIfNeeded()
+        let nextSub = descendants(of: next, SubToolbar.self).first { !$0.isHiddenOrHasHiddenAncestor }
+        check("再次截图：字号保持上次设置（20pt）", nextSub.flatMap { descendants(of: $0, MenuButton.self).first?.title.hasPrefix("20pt") } == true,
+              nextSub.flatMap { descendants(of: $0, MenuButton.self).first?.title } ?? "nil")
+        click(next, CGPoint(x: nb.width * 0.3, y: nb.height * 0.3))
+        type(next, "Again")
+        key(next, 53)
+        let again = next.debugEditor.model.document.annotations.last
+        check("再次截图：新文字使用上次的字号和样式", again?.style.fontSize == 20 * scale && again?.style.textStyle == .background,
+              "\(String(describing: again?.style))")
+        key(next, 53)
+        _ = await waitUntil { overlay() == nil }
     }
 
     static func testOutputs() async {

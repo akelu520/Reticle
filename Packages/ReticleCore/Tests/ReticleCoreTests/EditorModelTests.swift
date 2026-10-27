@@ -114,7 +114,9 @@ final class EditorModelTests: XCTestCase {
         XCTAssertEqual(m.document.annotations.first?.text, "hello")
 
         let id = m.document.annotations[0].id
-        XCTAssertEqual(m.pointerDown(at: CGPoint(x: 10, y: 10)), .editText(id))
+        // A click (press and release without dragging) edits; a drag would move the text.
+        XCTAssertEqual(m.pointerDown(at: CGPoint(x: 10, y: 10)), .movingAnnotation)
+        XCTAssertEqual(m.pointerUp(), .editText(id))
         XCTAssertEqual(m.visibleAnnotations.count, 0, "hidden while editing")
         m.finishText("   ")
         XCTAssertTrue(m.document.annotations.isEmpty)

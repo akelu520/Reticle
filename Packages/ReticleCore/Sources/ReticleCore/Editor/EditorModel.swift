@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// Annotation tools on the main toolbar.
-public enum Tool: String, CaseIterable, Sendable {
+public enum Tool: String, CaseIterable, Codable, Sendable {
     case rect, ellipse, line, arrow, pen, highlight, mosaic, text, label
 
     init(kind: AnnotationKind) {
@@ -29,7 +29,7 @@ public enum MosaicMode: Equatable, Sendable { case brush, box }
 
 public enum SizeLevel: Int, CaseIterable, Codable, Sendable { case small, medium, large }
 
-public struct ToolPreset: Equatable, Sendable {
+public struct ToolPreset: Equatable, Codable, Sendable {
     public var color: RGBA
     public var size: SizeLevel
     /// Text and label size in points (12pt, 14pt, …).
@@ -87,12 +87,33 @@ public struct EditorModel {
     private var history = History<Document>()
     private var pendingText: PendingText?
     private var move: (start: CGPoint, original: Annotation, before: Document, moved: Bool)?
+    /// Text pressed with the text tool: edited on release unless it was dragged.
+    private var editOnRelease: UUID?
 
-    public init(scale: CGFloat) {
+    /// - Parameter presets: tool options saved from an earlier session; missing tools get defaults.
+    public init(scale: CGFloat, presets saved: [Tool: ToolPreset] = [:]) {
         self.scale = scale
         var p: [Tool: ToolPreset] = [:]
-        for t in Tool.allCases { p[t] = ToolPreset(color: .red, size: .small) }
+        for t in Tool.allCases { p[t] = saved[t] ?? ToolPreset(color: .red, size: .small) }
         presets = p
+    }
+
+    /// Every tool's options, to be remembered for the next session.
+    public var toolPresets: [Tool: ToolPreset] { presets }
+
+    /// Options as JSON keyed by tool name, for storing them; unknown or broken entries are skipped.
+    public static func encodePresets(_ presets: [Tool: ToolPreset]) -> Data? {
+        try? JSONEncoder().encode(Dictionary(uniqueKeysWithValues: presets.map { ($0.key.rawValue, $0.value) }))
+    }
+
+    public static func decodePresets(_ data: Data?) -> [Tool: ToolPreset] {
+        guard let data, let raw = try? JSONDecoder().decode([String: ToolPreset].self, from: data) else { return [:] }
+        var presets: [Tool: ToolPreset] = [:]
+        for (key, preset) in raw {
+            guard let tool = Tool(rawValue: key), fontSizeChoices.contains(preset.fontSize) else { continue }
+            presets[tool] = preset
+        }
+        return presets
     }
 
     // MARK: - Styles
@@ -252,7 +273,13 @@ public struct EditorModel {
             return .movingAnnotation
 
         case .text:
-            if let hit, hit.kind == .text { return beginEditing(hit.id) }
+            if let hit, hit.kind == .text {
+                // Drag to move the text; a click without dragging edits it (on release).
+                selectedID = hit.id
+                move = (p, hit, document, false)
+                editOnRelease = hit.id
+                return .movingAnnotation
+            }
             pendingText = .newText(origin: p, style: style(for: .text))
             return .beginText(origin: p)
 
@@ -288,10 +315,12 @@ public struct EditorModel {
     public mutating func pointerDragged(to p: CGPoint, constrain: Bool = false) {
         if let m = move {
             let d = CGVector(dx: p.x - m.start.x, dy: p.y - m.start.y)
+            // A hand's jitter during a click is not a move.
+            guard m.moved || hypot(d.dx, d.dy) > Self.dragThreshold * scale else { return }
             if let i = document.annotations.firstIndex(where: { $0.id == m.original.id }) {
                 document.annotations[i] = m.original.translated(by: d)
             }
-            if hypot(d.dx, d.dy) > 0 { move?.moved = true }
+            move?.moved = true
             return
         }
         guard var d = draft, let start = d.points.first else { return }
@@ -305,13 +334,23 @@ public struct EditorModel {
         draft = d
     }
 
-    public mutating func pointerUp() {
+    /// Movement in points below which a press is a click, not a drag.
+    public static let dragThreshold: CGFloat = 2
+
+    /// Ends a press. Returns `.editText` when text pressed with the text tool was clicked, not dragged.
+    @discardableResult
+    public mutating func pointerUp() -> PointerOutcome {
+        defer { editOnRelease = nil }
         if let m = move {
-            if m.moved { history.record(m.before) }
             move = nil
-            return
+            if m.moved {
+                history.record(m.before)
+                return .none
+            }
+            if let id = editOnRelease { return beginEditing(id) }
+            return .none
         }
-        guard var d = draft else { return }
+        guard var d = draft else { return .none }
         draft = nil
         if d.kind.isStroke {
             if d.points.count == 1 { d.points.append(d.points[0]) }
@@ -319,13 +358,14 @@ public struct EditorModel {
             let r = d.spanRect
             let minSize = 2 * scale
             if d.kind == .arrow || d.kind == .line {
-                guard hypot(r.width, r.height) >= minSize * 2 else { return }
+                guard hypot(r.width, r.height) >= minSize * 2 else { return .none }
             } else {
-                guard r.width >= minSize, r.height >= minSize else { return }
+                guard r.width >= minSize, r.height >= minSize else { return .none }
             }
         }
         history.record(document)
         document.annotations.append(d)
+        return .none
     }
 
     static func constrained(from s: CGPoint, to p: CGPoint, kind: AnnotationKind) -> CGPoint {

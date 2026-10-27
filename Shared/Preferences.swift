@@ -15,6 +15,18 @@ enum Preferences {
         set { encode(newValue, "recordHotkey") }
     }
 
+    /// Annotation tool options (font size, text style, color, size, …) from the last session.
+    static var toolPresets: [Tool: ToolPreset] {
+        get { EditorModel.decodePresets(defaults.data(forKey: "toolPresets")) }
+        set { defaults.set(EditorModel.encodePresets(newValue), forKey: "toolPresets") }
+    }
+
+    /// The stored form of `toolPresets`, for tests that must leave it as they found it.
+    static var toolPresetsData: Data? {
+        get { defaults.data(forKey: "toolPresets") }
+        set { defaults.set(newValue, forKey: "toolPresets") }
+    }
+
     /// Target language picked from 翻译 ▾ (BCP-47), or nil to choose from the text.
     static var translationTarget: String? {
         get { defaults.string(forKey: "translationTarget") }
