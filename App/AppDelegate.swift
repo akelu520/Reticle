@@ -24,8 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onRecognizeText: { [weak self] in self?.startCapture(mode: .recognizeText) },
             onRecord: { [weak self] in self?.startCapture(mode: .record) },
             onSettings: { [weak self] in self?.settings.show() })
-        registerHotkey(.capture)
-        registerHotkey(.record)
+        // Test runs launch extra copies on purpose: they leave the user's own copy and
+        // its shortcuts alone, or a ⇧⌘A during a test would open two overlays.
+        if !Self.isTestRun {
+            quitOtherInstances()
+            registerHotkey(.capture)
+            registerHotkey(.record)
+        }
         RecordingStorage.purgeOnLaunch()
         #if DEBUG
         if ProcessInfo.processInfo.environment["RETICLE_AUTOSTART"] != nil { startCapture() }
@@ -64,6 +69,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // A recording worker may still be previewing its raw file.
         if !WorkerClient.isRecording { RecordingStorage.purgeOnQuit() }
+    }
+
+    /// Every running copy receives each global shortcut, so with two copies open (an old
+    /// version still running when a new one is opened from the DMG, say) one ⇧⌘A opened
+    /// two capture overlays and the second showed up after the first was done.
+    /// The copy opened last takes over.
+    private func quitOtherInstances() {
+        guard let id = Bundle.main.bundleIdentifier else { return }
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: id).filter { $0 != .current }
+        for app in others { app.terminate() }
+        // One stuck in a modal panel may not quit on request.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            for app in others where !app.isTerminated { app.forceTerminate() }
+        }
+    }
+
+    private static var isTestRun: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("RETICLE_") }
+        #else
+        false
+        #endif
     }
 
     /// Returns whether registration succeeded so settings can show a conflict warning.

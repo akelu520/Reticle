@@ -604,6 +604,9 @@ enum EndToEndTests {
         Preferences.captureHotkey = .defaultCapture
         delegate.registerHotkey(.capture)
         w.close()
+        // Release them again so a test copy never answers the user's ⇧⌘A.
+        HotkeyCenter.shared.unregister(.capture)
+        HotkeyCenter.shared.unregister(.record)
     }
 
     static func testHistory() async {
